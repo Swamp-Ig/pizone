@@ -5,7 +5,7 @@
     <ProjectGuid>6f3da869-5d64-41c1-b4a7-f06cf2be9bc7</ProjectGuid>
     <ProjectHome>
     </ProjectHome>
-    <StartupFile>test.py</StartupFile>
+    <StartupFile>tests\test.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -23,6 +23,9 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="setup.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="pizone\discovery.py">
       <SubType>Code</SubType>
     </Compile>
@@ -32,7 +35,7 @@
     <Compile Include="pizone\zone.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="test.py" />
+    <Compile Include="tests\test.py" />
     <Compile Include="pizone\controller.py">
       <SubType>Code</SubType>
     </Compile>
@@ -41,6 +44,7 @@
     </Compile>
   </ItemGroup>
   <ItemGroup>
+    <Folder Include="tests\" />
     <Folder Include="pizone\" />
   </ItemGroup>
   <ItemGroup>
@@ -55,6 +59,11 @@
     </Interpreter>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="AC-DOC-1401-11_iZoneEthernetInterface.pdf" />
+    <Content Include="licence.txt" />
+    <Content Include="readme.md">
+      <SubType>Code</SubType>
+    </Content>
     <Content Include="requirements.txt" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
