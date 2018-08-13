@@ -2,7 +2,6 @@
 import socket
 
 from datetime import timedelta
-from urllib.parse import unquote
 
 DISCOVERY_MSG = b'IASD'
 
@@ -11,6 +10,11 @@ UDP_PORT = 12107
 DISCOVERY_ADDRESS = '<broadcast>'
 DISCOVERY_TIMEOUT = timedelta(seconds=2)
 
+class Discovered:
+    """Controller information discovered by discovery process"""
+    def __init__(self, addr, uid):
+        self.addr = addr
+        self.uid = uid
 
 class Discovery:
     """Base class to discover iZone devices."""
@@ -54,10 +58,7 @@ class Discovery:
                     cb_id = message[1].split('_')[1]
                     address = message[2].split('_')[1]
 
-                    entries.append({
-                        'id': cb_id,
-                        'ip': address,
-                    })
+                    entries.append(Discovered(address, cb_id))
 
                 except socket.timeout:
                     break
@@ -67,29 +68,19 @@ class Discovery:
 
         self.entries = entries
 
-_discovery = Discovery()
+_DISCOVERY = Discovery()
 
-def get_all():
-    if len(_discovery.entries) == 0:
-        _discovery.scan()
-    return _discovery.entries
+def get_all() -> [Discovered]:
+    """Scan network for all iZone controllers."""
+    if not _DISCOVERY.entries:
+        _DISCOVERY.scan()
+    return _DISCOVERY.entries
 
-def get_ID(id):
+def get_by_uid(uid) -> Discovered:
+    """Scan network and return a controller matching a particular id"""
     entries = get_all()
     for entry in entries:
-        if entry['id'] == id:
+        if entry['id'] == uid:
             return entry
     return None
-
-
-def main():
-    """Test iZone discovery."""
-    from pprint import pprint
-    iZone = Discovery()
-    pprint("Scanning for iZone devices..")
-    iZone.update()
-    pprint(iZone.entries)
-
-if __name__ == "__main__":
-   main()
     

@@ -23,6 +23,9 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="pylintrc">
+      <SubType>Code</SubType>
+    </None>
     <Compile Include="setup.py">
       <SubType>Code</SubType>
     </Compile>
