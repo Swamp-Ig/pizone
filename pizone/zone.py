@@ -7,6 +7,7 @@ from typing import Dict, TypeVar
 import requests
 
 import pizone.controller as ctrl
+from .discovery import scan
 
 class ZoneType(Enum):
     """Zone Type enumeration
@@ -141,5 +142,5 @@ class Zone:
                 # Attempt to reconnect to a different IP using netdisco
                 if not retry:
                     raise ConnectionResetError("Lost connection to the iZone device") from exc
-                self.controller._refresh_ip() #pylint: disable=protected-access
+                scan()
                 return self._send_command(command, data, retry=False)

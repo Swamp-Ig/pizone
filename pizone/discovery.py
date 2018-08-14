@@ -3,6 +3,9 @@ import socket
 
 from datetime import timedelta
 
+from .utils import CoolDown
+from .controller import Controller
+
 DISCOVERY_MSG = b'IASD'
 
 UDP_PORT = 12107
@@ -10,77 +13,71 @@ UDP_PORT = 12107
 DISCOVERY_ADDRESS = '<broadcast>'
 DISCOVERY_TIMEOUT = timedelta(seconds=2)
 
-class Discovered:
-    """Controller information discovered by discovery process"""
-    def __init__(self, addr, uid):
-        self.addr = addr
-        self.uid = uid
+_DISCOVERED = {}
 
-class Discovery:
-    """Base class to discover iZone devices."""
+@CoolDown(10000)
+def scan(force=False) -> bool:
+    """Scan network for iZone devices.
 
-    def __init__(self):
-        """Initialize the iZone discovery."""
-        self.entries = []
+    Returns:
+        List of all devices discovered.
+    """
+    updated = False
 
-    def scan(self):
-        """Scan the network."""
-        self.update()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(DISCOVERY_TIMEOUT.seconds)
 
-    def all(self):
-        """Scan and return all found entries."""
-        self.scan()
-        return self.entries
+    try:
+        sock.sendto(DISCOVERY_MSG, (DISCOVERY_ADDRESS, UDP_PORT))
+        while True:
+            try:
+                data, (address, _) = sock.recvfrom(1024)
 
-    def update(self):
-        """Scan network for iZone devices."""
-        entries = []
+                message = data.decode().split(',')
+                if len(message) < 4 or message[0] != 'ASPort_12107' or message[3] != 'iZone':
+                    print("Invalid Message Received:", data.decode())
+                    continue
+                if message[3] != 'iZone':
+                    continue
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(DISCOVERY_TIMEOUT.seconds)
+                device_uid = message[1].split('_')[1]
+                address = message[2].split('_')[1]
 
-        try:
+                if device_uid not in _DISCOVERED:
+                    _DISCOVERED[device_uid] = Controller(device_uid=device_uid, device_ip=address)
+                    updated = True
+                else:
+                    disco = _DISCOVERED[device_uid] #pylint: disable=protected-access
+                    if disco and disco._ip != address: #pylint: disable=protected-access
+                        disco._ip = address #pylint: disable=protected-access
+            except socket.timeout:
+                break
+    finally:
+        sock.close()
 
-            sock.sendto(DISCOVERY_MSG, (DISCOVERY_ADDRESS, UDP_PORT))
+    return updated
 
-            while True:
-                try:
-                    data, (address, _) = sock.recvfrom(1024)
-
-                    message = data.decode().split(',')
-                    if len(message) < 4 or message[0] != 'ASPort_12107' or message[3] != 'iZone':
-                        print("Invalid Message Received:", data.decode())
-                        continue
-                    if message[3] != 'iZone':
-                        continue
-
-                    cb_id = message[1].split('_')[1]
-                    address = message[2].split('_')[1]
-
-                    entries.append(Discovered(address, cb_id))
-
-                except socket.timeout:
-                    break
-
-        finally:
-            sock.close()
-
-        self.entries = entries
-
-_DISCOVERY = Discovery()
-
-def get_all() -> [Discovered]:
+def controllers_all() -> [Controller]:
     """Scan network for all iZone controllers."""
-    if not _DISCOVERY.entries:
-        _DISCOVERY.scan()
-    return _DISCOVERY.entries
+    scan()
+    return _DISCOVERED.values
 
-def get_by_uid(uid) -> Discovered:
-    """Scan network and return a controller matching a particular id"""
-    entries = get_all()
-    for entry in entries:
-        if entry['id'] == uid:
-            return entry
-    return None
+def controller_by_uid(uid) -> Controller:
+    """Scan network and return a controller matching a particular id, or None if none found"""
+    scan()
+    return _DISCOVERED[uid]
+
+def controller_single() -> Controller:
+    """Get a singleton controller.
+    raises:
+        ConnectionAbortedError: If multiple controllers found.
+        ConnectionRefusedError: If no controllers are found.
+    """
+    scan()
+    if len(_DISCOVERED) > 1:
+        raise ConnectionAbortedError('Multiple iZone instances discovered on network')
+    if not _DISCOVERED:
+        raise ConnectionRefusedError('No iZone device found')
+    return next(iter(_DISCOVERED.values()))
     

@@ -1,11 +1,10 @@
 """Controller module"""
 
-import socket
 import json
 
 from enum import Enum
 
-from pizone.utils import CoolDown
+from pizone.utils import CoolDown, Event
 
 class ControllerMode(Enum):
     """Valid controller modes"""
@@ -24,6 +23,7 @@ class ControllerFan(Enum):
 
 class Controller:
     """Interface to IZone controller"""
+    event_new = Event()
 
     Mode = ControllerMode
     Fan = ControllerFan
@@ -37,53 +37,36 @@ class Controller:
         'var-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         }
 
-    def __init__(self, ipOrUId: str = None):
-        """Create a controller
+    def __init__(self, device_uid: str, device_ip: str):
+        """Create a controller interface. Usually this is called from the discovery service.
+
+        If neither device UID or address are specified, will search network
+        for exactly one controller. If UID is specified then the addr is ignored.
 
         Args:
-            id: Accepts an IP address, or controller UId as a string (eg: mine is '000013170')
+            device_uid: Controller UId as a string (eg: mine is '000013170')
+                If specified, will search the network for a matching device
+            device_addr: Device network address. Usually specified as IP address
 
         Raises:
             ConnectionAbortedError: If id is not set and more than one iZone instance is
                 discovered on the network.
             ConnectionRefusedError: If no iZone discovered, or no iZone device discovered at
-            the given IP address or UId
+                the given IP address or UId
         """
-        import pizone.discovery as disco
-
-        if ipOrUId is None:
-            disco_list = disco.get_all()
-            if len(disco_list) > 1:
-                raise ConnectionAbortedError('Multiple iZone instances discovered on network')
-            if not len:
-                raise ConnectionRefusedError('No iZone device found')
-
-            disco = disco_list[0]
-        else:
-            try:
-                socket.inet_aton(ipOrUId)
-                self._ip = ipOrUId  # id is an IP
-            except socket.error:
-                self._ip = None
-
-            if self._ip is None:
-                # id is a common name, try discovery
-                disco = disco.get_by_uid(ipOrUId)
-                if disco is None:
-                    raise ConnectionRefusedError("no device found for %s" % ipOrUId)
-
-        if disco is not None:
-            self._ip = disco.addr
-            self._device_uid = disco.uid
+        self._ip = device_ip
+        self._device_uid = device_uid
 
         self.info = {}
         self.zones = []
         self.fan_modes = []
-
-        self._device_uid = None
         self._system_settings = None
 
         self.refresh_all(force=True)
+
+        self.fan_modes = Controller._VALID_FAN_MODES[self._system_settings['FanAuto']]
+
+        Controller.event_new.fire(self)
 
     def refresh_all(self, force: bool = False) -> None:
         """Refresh all controller information"""
@@ -101,22 +84,12 @@ class Controller:
         Args:
             force: If true, force an update ignoring the cool-down.
         """
-        self._refresh_system(True)
+        values = self._get_resource('SystemSettings')
 
-    def _refresh_system(self, retry):
-        values = self._system_settings = self._get_resource('SystemSettings')
+        if self._device_uid != values['AirStreamDeviceUId']:
+            raise ConnectionAbortedError("iZone device has changed it's UID")
 
-        uid = values['AirStreamDeviceUId']
-        if self._device_uid is None:
-            self._device_uid = uid
-        elif self._device_uid != uid:
-            if not retry:
-                raise ConnectionAbortedError("iZone device has changed it's UID")
-            # if the UID we get back is different, try reconnecting and retrying
-            self._refresh_ip()
-            return self._refresh_system(retry=False)
-
-        self.fan_modes = Controller._VALID_FAN_MODES[values['FanAuto']]
+        self._system_settings = values
 
     @CoolDown(10000)
     def refresh_zones(self, force: bool = False) -> None:
@@ -326,21 +299,12 @@ class Controller:
         self._send_command(command, send)
         self._system_settings[state] = value
 
-    def _refresh_ip(self):
-        from pizone.discovery import get_by_uid
-        if self._device_uid is None:
-            raise ConnectionRefusedError("Attempted to reconnect IP but no UID set")
-        disco = get_by_uid(self.device_uid)
-        if disco is None:
-            raise ConnectionResetError("Lost connection to the iZone device")
-        self._ip = disco['ip']
-
     def _get_resource(self, resource, retry=True):
         response_json = None
         import requests
         with requests.session() as session:
             try:
-                req = session.get('http://%s/%s' % (self.device_ip, resource),
+                req = session.get('http://%s/%s' % (self._ip, resource),
                                   timeout=Controller.REQUEST_TIMEOUT)
                 req.raise_for_status()
                 response_json = req.json()
@@ -348,7 +312,8 @@ class Controller:
                 # Attempt to reconnect to a different IP using netdisco
                 if not retry:
                     raise ConnectionResetError("Lost connection to the iZone device")
-                self._refresh_ip()
+                from pizone.discovery import scan
+                scan(force=True)
                 return self._get_resource(resource, retry=False)
 
         return response_json
@@ -365,5 +330,6 @@ class Controller:
                 # Attempt to reconnect to a different IP using netdisco
                 if not retry:
                     raise ConnectionResetError("Lost connection to the iZone device") from exc
-                self._refresh_ip()
+                from pizone.discovery import scan
+                scan(force=True)
                 return self._send_command(command, data, retry=False)
