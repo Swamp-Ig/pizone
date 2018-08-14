@@ -1,6 +1,6 @@
 """Setup package"""
 
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages # type: ignore
 
 with open("README.md", "r") as fh:
     LONG_DESCRIPTION = fh.read()

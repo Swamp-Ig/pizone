@@ -1,6 +1,6 @@
 """Test for controller"""
 
-from pizone import controller_single
+from pizone import controller_single, Controller
 
 try:
     # Initialize the controler by creating it.
@@ -17,6 +17,9 @@ try:
     print(CTRL._system_settings)
     for zo in CTRL.zones:
         print(zo._zone_data)
+
+    CTRL.mode = Controller.Mode.HEAT
+    CTRL.state = False
 
     # Monkey with the guts. This should force an IP renew
     CTRL._ip = 'monkey'

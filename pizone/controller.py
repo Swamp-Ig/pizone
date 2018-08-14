@@ -3,6 +3,7 @@
 import json
 
 from enum import Enum
+from typing import List, Dict, Union
 
 from pizone.utils import CoolDown, Event
 
@@ -28,16 +29,19 @@ class Controller:
     Mode = ControllerMode
     Fan = ControllerFan
 
+    DictValue = Union[str, int, float]
+    ControllerData = Dict[str, DictValue]
+
     REQUEST_TIMEOUT = 0.5
 
-    _VALID_FAN_MODES = {
+    _VALID_FAN_MODES: Dict[str, List[ControllerFan]] = {
         'disabled' : [Fan.LOW, Fan.MED, Fan.HIGH],
         '3-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         '2-speed' : [Fan.LOW, Fan.HIGH, Fan.AUTO],
         'var-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         }
 
-    def __init__(self, device_uid: str, device_ip: str):
+    def __init__(self, device_uid: str, device_ip: str) -> None:
         """Create a controller interface. Usually this is called from the discovery service.
 
         If neither device UID or address are specified, will search network
@@ -57,14 +61,15 @@ class Controller:
         self._ip = device_ip
         self._device_uid = device_uid
 
-        self.info = {}
-        self.zones = []
-        self.fan_modes = []
-        self._system_settings = None
+        from pizone.zone import Zone
+
+        self.zones: List[Zone] = []
+        self.fan_modes: List[ControllerFan] = []
+        self._system_settings: Controller.ControllerData = {}
 
         self.refresh_all(force=True)
 
-        self.fan_modes = Controller._VALID_FAN_MODES[self._system_settings['FanAuto']]
+        self.fan_modes = Controller._VALID_FAN_MODES[str(self._system_settings['FanAuto'])]
 
         Controller.event_new.fire(self)
 
@@ -84,7 +89,7 @@ class Controller:
         Args:
             force: If true, force an update ignoring the cool-down.
         """
-        values = self._get_resource('SystemSettings')
+        values: Controller.ControllerData = self._get_resource('SystemSettings')
 
         if self._device_uid != values['AirStreamDeviceUId']:
             raise ConnectionAbortedError("iZone device has changed it's UID")
@@ -148,7 +153,7 @@ class Controller:
         return ControllerMode(self._get_system_state('SysMode'))
 
     @mode.setter
-    def mode(self, value: Mode):
+    def mode(self, value: ControllerMode):
         self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
@@ -160,7 +165,7 @@ class Controller:
         return ControllerFan(self._get_system_state('SysFan'))
 
     @fan.setter
-    def fan(self, value: Fan) -> None:
+    def fan(self, value: ControllerFan) -> None:
         if value not in self.fan_modes:
             raise AttributeError("Fan mode {} not allowed".format(value.value))
         self._set_system_state('SysFan', 'SystemFAN', value.value,

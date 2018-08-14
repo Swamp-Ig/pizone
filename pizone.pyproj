@@ -51,6 +51,17 @@
     <Folder Include="pizone\" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="AC-DOC-1401-11_iZoneEthernetInterface.pdf" />
+    <Content Include="licence.txt" />
+    <Content Include="readme.md">
+      <SubType>Code</SubType>
+    </Content>
+    <Content Include="requirements.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <InterpreterReference Include="Global|PythonCore|3.6" />
+  </ItemGroup>
+  <ItemGroup>
     <Interpreter Include="env\">
       <Id>env</Id>
       <Version>3.6</Version>
@@ -60,14 +71,6 @@
       <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
       <Architecture>X64</Architecture>
     </Interpreter>
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="AC-DOC-1401-11_iZoneEthernetInterface.pdf" />
-    <Content Include="licence.txt" />
-    <Content Include="readme.md">
-      <SubType>Code</SubType>
-    </Content>
-    <Content Include="requirements.txt" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

@@ -2,7 +2,7 @@
 
 import json
 from enum import Enum
-from typing import Dict, TypeVar
+from typing import Dict, Union
 
 import requests
 
@@ -35,10 +35,10 @@ class Zone:
 
     Type = ZoneType
     Mode = ZoneMode
-    DictValue = TypeVar('DictValue', str, int, float)
+    DictValue = Union[str, int, float]
     ZoneData = Dict[str, DictValue]
 
-    def __init__(self, controller: ctrl.Controller, zone_data: ZoneData):
+    def __init__(self, controller: ctrl.Controller, zone_data: ZoneData) -> None:
         self._zone_data = zone_data
         self._index = int(zone_data['Index'])
         self.controller = controller
@@ -96,7 +96,7 @@ class Zone:
         """Min allowed airflow for the zone as a percent"""
         return self._get_zone_state('MinAir')
 
-    @temp_setpoint.setter
+    @temp_setpoint.setter  # type: ignore
     def temp_setpoint(self, value: float) -> None:
         if self.type != ZoneType.AUTO:
             raise AttributeError('Can\'t set SetPoint to \'{}\' type zone.'.format(self.type))
@@ -110,7 +110,7 @@ class Zone:
         self._zone_data['SetPoint'] = value
         self._zone_data['Mode'] = ZoneMode.AUTO.value
 
-    @mode.setter
+    @mode.setter # type: ignore
     def mode(self, value: ZoneMode) -> None:
         if self.type == ZoneType.CONST:
             raise AttributeError('Can\'t set mode on constant zone.')
@@ -119,8 +119,8 @@ class Zone:
                 raise AttributeError('Can\'t use auto mode on open/close zone.')
             self._send_command('ZoneCommand', self.temp_setpoint)
         else:
-            self._send_command('ZoneCommand', value)
-        self._zone_data['Mode'] = value
+            self._send_command('ZoneCommand', value.value)
+        self._zone_data['Mode'] = value.value
 
     def _update_zone(self, zone_data):
         if zone_data['Index'] != self._index:
@@ -131,12 +131,12 @@ class Zone:
         self.controller.refresh_zones()
         return self._zone_data[state]
 
-    def _send_command(self, command, data, retry=True):
+    def _send_command(self, command: str, data: Union[str, int, float], retry: bool=True):
         with requests.session() as session:
             try:
                 payload = {command : {'ZoneNo': str(self._index), 'Command' : str(data)}}
                 req = session.post('http://%s/%s' % (self.controller.device_ip, command),
-                                   timeout=3, data=json.dumps(payload))
+                                   timeout=3, data=json.dumps(payload).encode())
                 req.raise_for_status()
             except requests.exceptions.RequestException as exc:
                 # Attempt to reconnect to a different IP using netdisco

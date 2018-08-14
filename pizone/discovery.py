@@ -2,6 +2,7 @@
 import socket
 
 from datetime import timedelta
+from typing import Dict, Iterable
 
 from .utils import CoolDown
 from .controller import Controller
@@ -13,7 +14,7 @@ UDP_PORT = 12107
 DISCOVERY_ADDRESS = '<broadcast>'
 DISCOVERY_TIMEOUT = timedelta(seconds=2)
 
-_DISCOVERED = {}
+_DISCOVERED: Dict[str, Controller] = {}
 
 @CoolDown(10000)
 def scan(force=False) -> bool:
@@ -58,10 +59,10 @@ def scan(force=False) -> bool:
 
     return updated
 
-def controllers_all() -> [Controller]:
+def controllers_all() -> Iterable[Controller]:
     """Scan network for all iZone controllers."""
     scan()
-    return _DISCOVERED.values
+    return _DISCOVERED.values()
 
 def controller_by_uid(uid) -> Controller:
     """Scan network and return a controller matching a particular id, or None if none found"""
