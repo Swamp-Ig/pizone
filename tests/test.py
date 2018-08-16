@@ -25,8 +25,6 @@ try:
     CTRL._ip = 'monkey'
     CTRL.refresh_system(force=True)
 
-
-
 except IOError as ex:
     print('exception:')
     print(ex)
