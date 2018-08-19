@@ -3,32 +3,30 @@
 from enum import Enum
 from typing import Dict, Union, Callable, List
 
-class ZoneType(Enum):
-    """Zone Type enumeration
-    This indicates the type of the zone. Possible values are:
-    'auto' – the zone has temperature control enabled
-    'opcl' – the zone is open/close only
-    'const' – the zone is a constant zone
-    """
-    AUTO = 'auto'
-    OPCL = 'opcl'
-    CONST = 'const'
-
-class ZoneMode(Enum):
-    """This indicates the current mode the zone is in. Possible values are:
-    'open' – the zone is currently open
-    'close' – the zone is currently closed
-    'auto' – the zone is currently in temperature control mode
-    """
-    OPEN = 'open'
-    CLOSE = 'close'
-    AUTO = 'auto'
-
 class Zone:
     """Interface to IZone zone"""
 
-    Type = ZoneType
-    Mode = ZoneMode
+    class Type(Enum):
+        """Zone Type enumeration
+        This indicates the type of the zone. Possible values are:
+        'auto' – the zone has temperature control enabled
+        'opcl' – the zone is open/close only
+        'const' – the zone is a constant zone
+        """
+        AUTO = 'auto'
+        OPCL = 'opcl'
+        CONST = 'const'
+
+    class Mode(Enum):
+        """This indicates the current mode the zone is in. Possible values are:
+        'open' – the zone is currently open
+        'close' – the zone is currently closed
+        'auto' – the zone is currently in temperature control mode
+        """
+        OPEN = 'open'
+        CLOSE = 'close'
+        AUTO = 'auto'
+
     DictValue = Union[str, int, float]
     ZoneData = Dict[str, DictValue]
 
@@ -64,22 +62,22 @@ class Zone:
         return self._get_zone_state('Name')
 
     @property
-    def type(self) -> ZoneType:
+    def type(self) -> 'Type':
         """This indicates the type of the zone. Possible values are:
         'auto' – the zone has temperature control enabled
         'opcl' – the zone is open/close only
         'const' – the zone is a constant zone
         """
-        return ZoneType(self._get_zone_state('Type'))
+        return self.Type(self._get_zone_state('Type'))
 
     @property
-    def mode(self) -> ZoneMode:
+    def mode(self) -> 'Mode':
         """This indicates the current mode the zone is in. Possible values are:
         'open' – the zone is currently open
         'close' – the zone is currently closed
         'auto' – the zone is currently in temperature control mode
         """
-        return ZoneMode(self._get_zone_state('Mode'))
+        return self.Mode(self._get_zone_state('Mode'))
 
     @property
     def temp_setpoint(self) -> float:
@@ -108,7 +106,7 @@ class Zone:
 
     @temp_setpoint.setter  # type: ignore
     def temp_setpoint(self, value: float) -> None:
-        if self.type != ZoneType.AUTO:
+        if self.type != Zone.Type.AUTO:
             raise AttributeError('Can\'t set SetPoint to \'{}\' type zone.'.format(self.type))
         if value % 0.5 != 0:
             raise AttributeError('SetPoint \'{}\' not rounded to nearest 0.5'.format(value))
@@ -122,18 +120,18 @@ class Zone:
 
         self._send_zone_command(value, callback)
         self._zone_data['SetPoint'] = value
-        self._zone_data['Mode'] = ZoneMode.AUTO.value
+        self._zone_data['Mode'] = Zone.Mode.AUTO.value
 
     @mode.setter # type: ignore
-    def mode(self, value: ZoneMode) -> None:
-        if self.type == ZoneType.CONST:
+    def mode(self, value: Mode) -> None:
+        if self.type == Zone.Type.CONST:
             raise AttributeError('Can\'t set mode on constant zone.')
 
         def callback():
             self._fire_listeners()
 
-        if value == ZoneMode.AUTO:
-            if self.type != ZoneType.AUTO:
+        if value == Zone.Mode.AUTO:
+            if self.type != Zone.Type.AUTO:
                 raise AttributeError('Can\'t use auto mode on open/close zone.')
             self._send_zone_command(self.temp_setpoint, callback)
         else:

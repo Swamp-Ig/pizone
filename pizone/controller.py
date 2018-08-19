@@ -14,25 +14,22 @@ from .zone import Zone
 
 _LOG = logging.getLogger("pizone.controller")
 
-class ControllerMode(Enum):
-    """Valid controller modes"""
-    COOL = 'cool'
-    HEAT = 'heat'
-    VENT = 'vent'
-    DRY = 'dry'
-    AUTO = 'auto'
-
-class ControllerFan(Enum):
-    """All fan modes"""
-    LOW = 'low'
-    MED = 'med'
-    HIGH = 'high'
-    AUTO = 'auto'
-
 class Controller:
     """Interface to IZone controller"""
-    Mode = ControllerMode
-    Fan = ControllerFan
+    class Mode(Enum):
+        """Valid controller modes"""
+        COOL = 'cool'
+        HEAT = 'heat'
+        VENT = 'vent'
+        DRY = 'dry'
+        AUTO = 'auto'
+
+    class Fan(Enum):
+        """All fan modes"""
+        LOW = 'low'
+        MED = 'med'
+        HIGH = 'high'
+        AUTO = 'auto'
 
     Listener = Callable[['Controller'], None]
 
@@ -50,7 +47,7 @@ class Controller:
 
     _retry_task: Optional[Task]
 
-    _VALID_FAN_MODES: Dict[str, List[ControllerFan]] = {
+    _VALID_FAN_MODES: Dict[str, List[Fan]] = {
         'disabled' : [Fan.LOW, Fan.MED, Fan.HIGH],
         '3-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         '2-speed' : [Fan.LOW, Fan.HIGH, Fan.AUTO],
@@ -79,7 +76,7 @@ class Controller:
         self._device_uid = device_uid
 
         self.zones: List[Zone] = []
-        self.fan_modes: List[ControllerFan] = []
+        self.fan_modes: List[Controller.Fan] = []
         self._system_settings: Controller.ControllerData = {}
 
         self._listeners: List[Controller.Listener] = []
@@ -120,24 +117,24 @@ class Controller:
         self._set_system_state('SysOn', 'SystemON', 'on' if value else 'off')
 
     @property
-    def mode(self) -> ControllerMode:
+    def mode(self) -> 'Mode':
         """System mode, cooling, heating, etc"""
-        return ControllerMode(self._get_system_state('SysMode'))
+        return self.Mode(self._get_system_state('SysMode'))
 
     @mode.setter
-    def mode(self, value: ControllerMode):
+    def mode(self, value: Mode):
         self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
-    def fan(self) -> ControllerFan:
+    def fan(self) -> 'Fan':
         """The fan level. Not all fan modes are allowed.
         Raises:
             AttributeError: On setting if the argument value is not valid
         """
-        return ControllerFan(self._get_system_state('SysFan'))
+        return self.Fan(self._get_system_state('SysFan'))
 
     @fan.setter
-    def fan(self, value: ControllerFan) -> None:
+    def fan(self, value: Fan) -> None:
         if value not in self.fan_modes:
             raise AttributeError("Fan mode {} not allowed".format(value.value))
         self._set_system_state('SysFan', 'SystemFAN', value.value,
