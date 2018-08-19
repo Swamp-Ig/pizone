@@ -129,12 +129,11 @@ class DiscoveryProtocol(DatagramProtocol):
         elif data == CHANGED_SYSTEM:
             ctrl = self._find_by_addr(addr)
             if ctrl:
-                self.loop.create_task(ctrl._refresh_system())
+                self.loop.create_task(ctrl._refresh_system()) # pylint: disable=protected-access
         elif data == CHANGED_ZONES:
             ctrl = self._find_by_addr(addr)
             if ctrl:
-                self.loop.create_task(ctrl._refresh_zones())
-            pass
+                self.loop.create_task(ctrl._refresh_zones()) # pylint: disable=protected-access
         else:
             self._discovery_recieved(data)
 

@@ -13,7 +13,8 @@ def discovered(controller: Controller) -> None:
     print(f"sleep_timer={controller.sleep_timer}")
 
     for zone in controller.zones:
-        print(f"Name {zone.name} temp:{zone.temp_current} target:{zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode}")
+        print(f"Name {zone.name} temp:{zone.temp_current} " +
+              f"target:{zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode}")
 
     #controller.mode = Controller.Mode.HEAT
     #controller.state = not controller.state

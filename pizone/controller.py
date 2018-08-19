@@ -34,6 +34,8 @@ class Controller:
     Mode = ControllerMode
     Fan = ControllerFan
 
+    Listener = Callable[['Controller'], None]
+
     DictValue = Union[str, int, float]
     ControllerData = Dict[str, DictValue]
 
@@ -86,11 +88,11 @@ class Controller:
         self._fail_exception = None
 
 
-    def add_listener(self, listener) -> None:
+    def add_listener(self, listener: Controller.Listener) -> None:
         """Add a listener for the system updated event"""
         self._listeners.append(listener)
 
-    def remove_listener(self, listener) -> None:
+    def remove_listener(self, listener: Controller.Listener) -> None:
         """Remove listener"""
         self._listeners.remove(listener)
 
@@ -342,7 +344,8 @@ class Controller:
             except asyncio.CancelledError:
                 _LOG.info("Sleep cancelled")
 
-            _LOG.info("Attempting to reconnect to server uid=%s ip=%s", self.device_uid, self.device_ip)
+            _LOG.info("Attempting to reconnect to server uid=%s ip=%s",
+                      self.device_uid, self.device_ip)
             try:
                 # On the off-chance of a cancel while refreshing, just try again.
                 while True:
