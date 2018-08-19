@@ -82,7 +82,7 @@ class Controller:
         self.fan_modes: List[ControllerFan] = []
         self._system_settings: Controller.ControllerData = {}
 
-        self._listeners: Listener = []
+        self._listeners: List[Controller.Listener] = []
 
         self._retry_task = None
         self._fail_exception = None
