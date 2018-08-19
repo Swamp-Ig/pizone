@@ -26,16 +26,10 @@
     <None Include=".pylintrc">
       <SubType>Code</SubType>
     </None>
-    <Compile Include="pizone\async_utils.py">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="setup.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="pizone\discovery.py">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="pizone\utils.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="pizone\zone.py">
