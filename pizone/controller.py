@@ -1,11 +1,18 @@
 """Controller module"""
 
-import json
-
+import asyncio
+from asyncio import AbstractEventLoop, Task
 from enum import Enum
-from typing import List, Dict, Union
+import json
+import logging
+from typing import List, Dict, Union, Any, Callable, Optional
 
-from pizone.utils import CoolDown, Event
+import aiohttp # type: ignore
+from aiohttp import ClientSession # type: ignore
+
+from .zone import Zone
+
+_LOG = logging.getLogger("pizone.controller")
 
 class ControllerMode(Enum):
     """Valid controller modes"""
@@ -24,15 +31,22 @@ class ControllerFan(Enum):
 
 class Controller:
     """Interface to IZone controller"""
-    event_new = Event()
-
     Mode = ControllerMode
     Fan = ControllerFan
 
     DictValue = Union[str, int, float]
     ControllerData = Dict[str, DictValue]
 
-    REQUEST_TIMEOUT = 0.5
+    REQUEST_TIMEOUT = 3
+    """Time to wait for results from server."""
+
+    CONNECT_RETRY_TIMEOUT = 20
+    """Cool-down period for retrying to connect to the controller"""
+
+    loop: AbstractEventLoop
+    session: ClientSession
+
+    _retry_task: Optional[Task]
 
     _VALID_FAN_MODES: Dict[str, List[ControllerFan]] = {
         'disabled' : [Fan.LOW, Fan.MED, Fan.HIGH],
@@ -41,7 +55,7 @@ class Controller:
         'var-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         }
 
-    def __init__(self, device_uid: str, device_ip: str) -> None:
+    def __init__(self, discovery, device_uid: str, device_ip: str) -> None:
         """Create a controller interface. Usually this is called from the discovery service.
 
         If neither device UID or address are specified, will search network
@@ -59,74 +73,30 @@ class Controller:
                 the given IP address or UId
         """
         self._ip = device_ip
+        self._discovery = discovery
         self._device_uid = device_uid
-
-        from pizone.zone import Zone
 
         self.zones: List[Zone] = []
         self.fan_modes: List[ControllerFan] = []
         self._system_settings: Controller.ControllerData = {}
 
-        self.refresh_all(force=True)
+        self._listeners: List[Callable] = []
 
-        self.fan_modes = Controller._VALID_FAN_MODES[str(self._system_settings['FanAuto'])]
+        self._retry_task = None
+        self._fail_exception = None
 
-        Controller.event_new.fire(self)
 
-    def refresh_all(self, force: bool = False) -> None:
-        """Refresh all controller information"""
-        self.refresh_system(force)
-        self.refresh_zones(force)
-        self.refresh_schedules(force)
+    def add_listener(self, listener) -> None:
+        """Add a listener for the system updated event"""
+        self._listeners.append(listener)
 
-    @CoolDown(10000)
-    def refresh_system(self, force: bool = False) -> None:
-        """Refresh the system settings.
+    def remove_listener(self, listener) -> None:
+        """Remove listener"""
+        self._listeners.remove(listener)
 
-        This has a cool-down of 10 seconds, and will only refresh if at least this time
-        period has elapsed.
-
-        Args:
-            force: If true, force an update ignoring the cool-down.
-        """
-        values: Controller.ControllerData = self._get_resource('SystemSettings')
-
-        if self._device_uid != values['AirStreamDeviceUId']:
-            raise ConnectionAbortedError("iZone device has changed it's UID")
-
-        self._system_settings = values
-
-    @CoolDown(10000)
-    def refresh_zones(self, force: bool = False) -> None:
-        """Refresh the Zone information.
-
-        This has a cool-down of 10 seconds, and will only refresh if at least this time period
-        has elapsed.
-
-        Args:
-            force: If true, force an update ignoring the cool-down.
-        """
-
-        from pizone.zone import Zone
-        zones = self.zones_total
-
-        zone_data_part = self._get_resource('Zones1_4')
-        if zones > 4:
-            zone_data_part.extend(self._get_resource('Zones5_8'))
-            if zones > 8:
-                zone_data_part.extend(self._get_resource('Zones9_12'))
-
-        for i in range(0, zones):
-            zone_data = zone_data_part[i]
-            if len(self.zones) <= i:
-                self.zones.append(Zone(self, zone_data))
-            else:
-                self.zones[i]._update_zone(zone_data) #pylint: disable=protected-access
-
-    @CoolDown(10000)
-    def refresh_schedules(self, force: bool = False) -> None:
-        """TODO: Not implemented"""
-        pass
+    def _fire_listeners(self) -> None:
+        for listener in self._listeners:
+            listener(self)
 
     @property
     def device_ip(self) -> str:
@@ -291,9 +261,54 @@ class Controller:
         """
         return self._get_system_state('SysType')
 
+    async def initialize(self, session: ClientSession) -> None:
+        """Initialize the controller, does not complete until the system is initialised."""
+        self.session = session
+        self.loop = session.loop
+
+        await self._refresh_system(notify=False)
+        zone_count = int(self._system_settings['NoOfZones'])
+        self.zones = [Zone(self, i) for i in range(zone_count)]
+        self.fan_modes = Controller._VALID_FAN_MODES[str(self._system_settings['FanAuto'])]
+        await self._refresh_zones(notify=False)
+
+    async def _refresh_system(self, notify: bool = True) -> None:
+        """Refresh the system settings."""
+        values: Controller.ControllerData = await self._get_resource('SystemSettings')
+
+        if self._device_uid != values['AirStreamDeviceUId']:
+            _LOG.error("_refresh_system called with unmatching device ID")
+            return
+
+        self._system_settings = values
+
+        if notify:
+            self._fire_listeners()
+
+    async def _refresh_zones(self, notify: bool = True) -> None:
+        """Refresh the Zone information."""
+        zones = int(self._system_settings['NoOfZones'])
+        await asyncio.gather(*[self._refresh_zone_group(i, notify)
+                               for i in range(0, zones, 4)], loop=self.loop)
+
+    async def _refresh_zone_group(self, group: int, notify: bool = True):
+        assert group in [0, 4, 8]
+        zone_data_part = await self._get_resource(f"Zones{group+1}_{group+4}")
+
+        for i in range(4):
+            zone_data = zone_data_part[i]
+            self.zones[i+group]._update_zone(zone_data, notify) #pylint: disable=protected-access
+
+    def update_address(self, address):
+        """Called from discovery to update the address"""
+        if self._ip == address:
+            return
+        self._ip = address
+        if self._retry_task:
+            self._retry_task.cancel()
 
     def _get_system_state(self, state):
-        self.refresh_system()
+        self._ensure_connected()
         return self._system_settings[state]
 
     def _set_system_state(self, state, command, value, send=None):
@@ -301,40 +316,76 @@ class Controller:
             send = value
         if self._system_settings[state] == value:
             return
-        self._send_command(command, send)
+        def callback():
+            self._fire_listeners()
+        self.loop.create_task(self._send_command(command, send, callback))
         self._system_settings[state] = value
 
-    def _get_resource(self, resource, retry=True):
-        response_json = None
-        import requests
-        with requests.session() as session:
-            try:
-                req = session.get('http://%s/%s' % (self._ip, resource),
-                                  timeout=Controller.REQUEST_TIMEOUT)
-                req.raise_for_status()
-                response_json = req.json()
-            except requests.exceptions.RequestException:
-                # Attempt to reconnect to a different IP using netdisco
-                if not retry:
-                    raise ConnectionResetError("Lost connection to the iZone device")
-                from pizone.discovery import scan
-                scan(force=True)
-                return self._get_resource(resource, retry=False)
+    def _ensure_connected(self) -> None:
+        if self._retry_task:
+            raise ConnectionError("Unable to connect to the controller") from self._fail_exception
 
-        return response_json
+    def _failed_connection(self, ex):
+        self._fail_exception = ex
+        if self._retry_task:
+            return
+        _LOG.warning("Server not connected. uid=%s, error: %s ", self.device_uid, ex.__repr__())
+        self._retry_task = self.loop.create_task(self._retry_connection())
 
-    def _send_command(self, command, data, retry=True):
-        import requests
-        with requests.session() as session:
+
+    async def _retry_connection(self) -> None:
+        while True:
+            self._discovery.rescan()
+            # sleep will get cancelled if the discovery rescan is successful
             try:
-                data = {command : data}
-                req = session.post('http://%s/%s' % (self.device_ip, command),
-                                   timeout=3, data=json.dumps(data))
-                req.raise_for_status()
-            except requests.exceptions.RequestException as exc:
-                # Attempt to reconnect to a different IP using netdisco
-                if not retry:
-                    raise ConnectionResetError("Lost connection to the iZone device") from exc
-                from pizone.discovery import scan
-                scan(force=True)
-                return self._send_command(command, data, retry=False)
+                await asyncio.sleep(Controller.CONNECT_RETRY_TIMEOUT)
+            except asyncio.CancelledError:
+                _LOG.info("Sleep cancelled")
+
+            _LOG.info("Attempting to reconnect to server uid=%s ip=%s", self.device_uid, self.device_ip)
+            try:
+                # On the off-chance of a cancel while refreshing, just try again.
+                while True:
+                    try:
+                        await asyncio.gather(self._refresh_system(notify=False),
+                                             self._refresh_zones(notify=False),
+                                             loop=self.loop)
+                        break
+                    except asyncio.CancelledError:
+                        _LOG.info("Refresh cancelled, refreshing again.")
+
+                _LOG.warning("Successfully reconnected to server uid=%s", self.device_uid)
+                self._retry_task = None
+
+                def fire_all_listeners() -> None:
+                    self._fire_listeners()
+                    for zone in self.zones:
+                        zone._fire_listeners() # pylint: disable=protected-access
+
+                self.loop.call_soon(fire_all_listeners)
+                return
+            except ConnectionError as ex:
+                # Expected, just carry on.
+                _LOG.warning("Reconnect attempt for uid=%s failed with exception: %s",
+                             self.device_uid, ex.__repr__())
+
+    async def _get_resource(self, resource: str):
+        try:
+            async with self.session.get('http://%s/%s' % (self.device_ip, resource),
+                                        timeout=Controller.REQUEST_TIMEOUT) as response:
+                return await response.json()
+        except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as ex:
+            self._failed_connection(ex)
+            raise ConnectionError("Unable to connect to the controller") from ex
+
+    async def _send_command(self, command: str, data: Any, callback: Callable = None):
+        try:
+            body = json.dumps({command : data})
+            async with self.session.post('http://%s/%s' % (self.device_ip, command),
+                                         timeout=Controller.REQUEST_TIMEOUT,
+                                         data=body) as response:
+                response.raise_for_status()
+            if callback:
+                callback()
+        except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as ex:
+            self._failed_connection(ex)

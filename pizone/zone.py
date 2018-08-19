@@ -1,13 +1,7 @@
 """Zone object. Various properties allow interogation and setting of zone data."""
 
-import json
 from enum import Enum
-from typing import Dict, Union
-
-import requests
-
-import pizone.controller as ctrl
-from .discovery import scan
+from typing import Dict, Union, Callable, List
 
 class ZoneType(Enum):
     """Zone Type enumeration
@@ -38,10 +32,26 @@ class Zone:
     DictValue = Union[str, int, float]
     ZoneData = Dict[str, DictValue]
 
-    def __init__(self, controller: ctrl.Controller, zone_data: ZoneData) -> None:
-        self._zone_data = zone_data
-        self._index = int(zone_data['Index'])
+    Listener = Callable[['Zone'], None]
+
+    def __init__(self, controller, index: int) -> None:
+        self._zone_data: Dict = {}
+        self._index = index
         self.controller = controller
+        self._listeners: List[Zone.Listener] = []
+
+    def add_listener(self, listener: Listener) -> None:
+        """Add a listener for the system updated event"""
+        self._listeners.append(listener)
+
+    def remove_listener(self, listener: Listener) -> None:
+        """Remove listener"""
+        self._listeners.remove(listener)
+
+    def _fire_listeners(self) -> None:
+        for listener in self._listeners:
+            listener(self)
+
 
     @property
     def index(self) -> int:
@@ -106,7 +116,11 @@ class Zone:
             raise AttributeError('SetPoint \'{}\' is out of range'.format(value))
         if self._zone_data['SetPoint'] == value:
             return
-        self._send_command('ZoneCommand', value)
+
+        def callback():
+            self._fire_listeners()
+
+        self._send_zone_command(value, callback)
         self._zone_data['SetPoint'] = value
         self._zone_data['Mode'] = ZoneMode.AUTO.value
 
@@ -114,33 +128,31 @@ class Zone:
     def mode(self, value: ZoneMode) -> None:
         if self.type == ZoneType.CONST:
             raise AttributeError('Can\'t set mode on constant zone.')
+
+        def callback():
+            self._fire_listeners()
+
         if value == ZoneMode.AUTO:
             if self.type != ZoneType.AUTO:
                 raise AttributeError('Can\'t use auto mode on open/close zone.')
-            self._send_command('ZoneCommand', self.temp_setpoint)
+            self._send_zone_command(self.temp_setpoint, callback)
         else:
-            self._send_command('ZoneCommand', value.value)
+            self._send_zone_command(value.value, callback)
         self._zone_data['Mode'] = value.value
 
-    def _update_zone(self, zone_data):
+    def _update_zone(self, zone_data, notify: bool = True):
         if zone_data['Index'] != self._index:
             raise AttributeError('Can\'t change index of existing zone.')
         self._zone_data = zone_data
+        if notify:
+            self._fire_listeners()
 
     def _get_zone_state(self, state):
-        self.controller.refresh_zones()
+        self.controller._ensure_connected() # pylint: disable=protected-access
         return self._zone_data[state]
 
-    def _send_command(self, command: str, data: Union[str, int, float], retry: bool=True):
-        with requests.session() as session:
-            try:
-                payload = {command : {'ZoneNo': str(self._index), 'Command' : str(data)}}
-                req = session.post('http://%s/%s' % (self.controller.device_ip, command),
-                                   timeout=3, data=json.dumps(payload).encode())
-                req.raise_for_status()
-            except requests.exceptions.RequestException as exc:
-                # Attempt to reconnect to a different IP using netdisco
-                if not retry:
-                    raise ConnectionResetError("Lost connection to the iZone device") from exc
-                scan()
-                return self._send_command(command, data, retry=False)
+    def _send_zone_command(self, data: Union[str, float], callback: Callable = None):
+        send_data = {'ZoneNo': str(self._index), 'Command' : str(data)}
+        # pylint: disable=protected-access
+        self.controller._send_command('ZoneCommand', send_data, callback)
+        # pylint: enable=protected-access

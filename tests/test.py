@@ -1,30 +1,50 @@
 """Test for controller"""
 
-from pizone import controller_single, Controller
+import asyncio
+from asyncio import Task, AbstractEventLoop
 
-try:
-    # Initialize the controler by creating it.
-    # Can also be passed the IP address directly,
-    # or the controller UId as a string (mine is '000013170')
-    # Will follow the controller through IP address changes
-    CTRL = controller_single()
+from pizone import Controller, Zone, discovery
 
-    print(CTRL.device_ip)
-    print(CTRL.device_uid)
-    print(CTRL.temp_supply)
+def discovered(controller: Controller) -> None:
+    """Testing"""
+    print(controller.device_ip)
+    print(controller.device_uid)
+    print(f"supply={controller.temp_supply} mode={controller.mode} isOn={controller.state}")
+    print(f"sleep_timer={controller.sleep_timer}")
 
-    #pylint: disable=protected-access
-    print(CTRL._system_settings)
-    for zo in CTRL.zones:
-        print(zo._zone_data)
+    for zone in controller.zones:
+        print(f"Name {zone.name} temp:{zone.temp_current} target:{zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode}")
 
-    CTRL.mode = Controller.Mode.HEAT
-    CTRL.state = False
+    #controller.mode = Controller.Mode.HEAT
+    #controller.state = not controller.state
+    #print(f"supply={controller.temp_supply} mode={controller.mode} isOn={controller.state}")
 
-    # Monkey with the guts. This should force an IP renew
-    CTRL._ip = 'monkey'
-    CTRL.refresh_system(force=True)
+    Controller.CONNECT_RETRY_TIMEOUT = 2
 
-except IOError as ex:
-    print('exception:')
-    print(ex)
+    controller._ip = 'bababa' # pylint: disable=protected-access
+    try:
+        controller.sleep_timer = 30
+    except ConnectionError:
+        pass
+
+    controller.add_listener(reconnected)
+
+# Callback for when reconnected
+def reconnected(controller: Controller) -> None:
+    """Testing"""
+    controller.sleep_timer = 30
+    controller.remove_listener(reconnected)
+
+    print("Successfully reconnected")
+    controller.sleep_timer = 0
+
+
+    task.cancel()
+
+loop: AbstractEventLoop = asyncio.get_event_loop()
+
+task: Task = loop.create_task(discovery(discovered))
+
+loop.run_until_complete(task)
+
+loop.run_until_complete(asyncio.sleep(600))

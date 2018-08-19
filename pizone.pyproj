@@ -23,7 +23,7 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="pylintrc">
+    <None Include=".pylintrc">
       <SubType>Code</SubType>
     </None>
     <Compile Include="pizone\async_utils.py">

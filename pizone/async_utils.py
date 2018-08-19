@@ -1,9 +1,9 @@
 """Utilities for asynchonous IO"""
 
 from threading import Thread
-from typing import Callable, Optional
+from typing import Optional
 from asyncio import AbstractEventLoop
-from aiohttp import ClientSession
+from aiohttp import ClientSession #type: ignore
 
 _EVENT_LOOP: Optional[AbstractEventLoop] = None
 
@@ -44,16 +44,17 @@ def set_client_session(session) -> None:
         RuntimeError: If the event loop has already been set (to a different value).
     """
     global _CLIENT_SESSION
-    if _CLIENT_SESSION is loop:
+    if _CLIENT_SESSION is session:
         return
     if _CLIENT_SESSION:
         raise RuntimeError("Event loop already set up for package.")
-    _CLIENT_SESSION = loop
+    _CLIENT_SESSION = session
 
 def get_client_session() -> ClientSession:
-    """Get the event loop for the package. If none set up using set_client_session, will use the default event loop."""
+    """Get the event loop for the package.
+    If none set up using set_client_session, will use the default event loop.
+    """
     global _CLIENT_SESSION
     if not _CLIENT_SESSION:
         _CLIENT_SESSION = ClientSession(loop=get_event_loop())
     return _CLIENT_SESSION
-
