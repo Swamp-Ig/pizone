@@ -82,17 +82,17 @@ class Controller:
         self.fan_modes: List[ControllerFan] = []
         self._system_settings: Controller.ControllerData = {}
 
-        self._listeners: List[Callable] = []
+        self._listeners: Listener = []
 
         self._retry_task = None
         self._fail_exception = None
 
 
-    def add_listener(self, listener: Controller.Listener) -> None:
+    def add_listener(self, listener: Listener) -> None:
         """Add a listener for the system updated event"""
         self._listeners.append(listener)
 
-    def remove_listener(self, listener: Controller.Listener) -> None:
+    def remove_listener(self, listener: Listener) -> None:
         """Remove listener"""
         self._listeners.remove(listener)
 
