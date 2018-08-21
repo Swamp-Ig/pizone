@@ -115,28 +115,24 @@ class Zone:
         if self._zone_data['SetPoint'] == value:
             return
 
-        def callback():
-            self._fire_listeners()
-
-        self._send_zone_command(value, callback)
+        self._send_zone_command(value)
         self._zone_data['SetPoint'] = value
         self._zone_data['Mode'] = Zone.Mode.AUTO.value
+        self._fire_listeners()
 
     @mode.setter # type: ignore
     def mode(self, value: Mode) -> None:
         if self.type == Zone.Type.CONST:
             raise AttributeError('Can\'t set mode on constant zone.')
 
-        def callback():
-            self._fire_listeners()
-
         if value == Zone.Mode.AUTO:
             if self.type != Zone.Type.AUTO:
                 raise AttributeError('Can\'t use auto mode on open/close zone.')
-            self._send_zone_command(self.temp_setpoint, callback)
+            self._send_zone_command(self.temp_setpoint)
         else:
-            self._send_zone_command(value.value, callback)
+            self._send_zone_command(value.value)
         self._zone_data['Mode'] = value.value
+        self._fire_listeners()
 
     def _update_zone(self, zone_data, notify: bool = True):
         if zone_data['Index'] != self._index:
@@ -149,8 +145,8 @@ class Zone:
         self.controller._ensure_connected() # pylint: disable=protected-access
         return self._zone_data[state]
 
-    def _send_zone_command(self, data: Union[str, float], callback: Callable = None):
+    def _send_zone_command(self, data: Union[str, float]):
         send_data = {'ZoneNo': str(self._index), 'Command' : str(data)}
         # pylint: disable=protected-access
-        self.controller._send_command('ZoneCommand', send_data, callback)
+        self.controller._send_command('ZoneCommand', send_data)
         # pylint: enable=protected-access

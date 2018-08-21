@@ -9,6 +9,7 @@ from typing import List, Dict, Union, Any, Callable, Optional
 
 import aiohttp # type: ignore
 from aiohttp import ClientSession # type: ignore
+import requests
 
 from .zone import Zone
 
@@ -317,7 +318,7 @@ class Controller:
             return
         def callback():
             self._fire_listeners()
-        self.loop.create_task(self._send_command(command, send, callback))
+        self._send_command(command, send)
         self._system_settings[state] = value
 
     def _ensure_connected(self) -> None:
@@ -378,14 +379,34 @@ class Controller:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
 
-    async def _send_command(self, command: str, data: Any, callback: Callable = None):
+    def _send_command(self, command: str, data: Any):
+        if False:
+            self.loop.create_task(self._send_command_async(command, data))
+
+        if True:
+            # Do this synchonously. For some reason, this doesn't work with aiohttp
+            body = {command : data}
+            url = f"http://{self.device_ip}/{command}"
+            try:
+                with requests.post(url,
+                                   timeout=Controller.REQUEST_TIMEOUT,
+                                   data=json.dumps(body)) as response:
+                    response.raise_for_status()
+            except requests.exceptions.RequestException as ex:
+                self._failed_connection(ex)
+                raise ex
+
+    async def _send_command_async(self, command: str, data: Any):
+        # This isn't currently working. See: https://github.com/aio-libs/aiohttp/issues/3208
+        body = {command : data}
+        url = f"http://{self.device_ip}/{command}"
         try:
-            body = json.dumps({command : data})
-            async with self.session.post('http://%s/%s' % (self.device_ip, command),
-                                         timeout=Controller.REQUEST_TIMEOUT,
-                                         data=body) as response:
+            async with self.session.post(url,
+                                        timeout=Controller.REQUEST_TIMEOUT,
+                                        headers={ "Connection" : "keep-alive:" },
+                                        json=body) as response:
                 response.raise_for_status()
-            if callback:
-                callback()
+            await asyncio.sleep(1)
         except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as ex:
             self._failed_connection(ex)
+            raise ex
