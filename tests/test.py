@@ -1,51 +1,74 @@
 """Test for controller"""
 
 import asyncio
-from asyncio import Task, AbstractEventLoop
+from asyncio import AbstractEventLoop, Condition
 
-from pizone import Controller, Zone, discovery
+from pizone import Listener, Zone, Controller, discovery
 
-def discovered(controller: Controller) -> None:
-    """Testing"""
-    print(controller.device_ip)
-    print(controller.device_uid)
-    print(f"supply={controller.temp_supply} mode={controller.mode} isOn={controller.state}")
-    print(f"sleep_timer={controller.sleep_timer}")
+# pylint: disable=missing-docstring
 
-    for zone in controller.zones:
-        print(f"Name {zone.name} type:{zone.type.value} temp:{zone.temp_current} " +
-              f"target:{zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode.value}")
+class TestListener(Listener):
+    """Test Listener"""
+    condition: Condition
+    ctrl: Controller
+    loop: AbstractEventLoop
 
-    #controller.mode = Controller.Mode.HEAT
-    #controller.state = not controller.state
-    #print(f"supply={controller.temp_supply} mode={controller.mode} isOn={controller.state}")
+    def dump_data(self):
+        """Testing"""
+        ctrl = self.ctrl
+        print(ctrl.device_ip)
+        print(ctrl.device_uid)
+        print(f"supply={ctrl.temp_supply} mode={ctrl.mode} isOn={ctrl.state}")
+        print(f"sleep_timer={ctrl.sleep_timer}")
 
-    Controller.CONNECT_RETRY_TIMEOUT = 2
-
-    controller._ip = 'bababa' # pylint: disable=protected-access
-    try:
-        controller.sleep_timer = 30
-    except ConnectionError:
-        pass
-
-    controller.add_listener(reconnected)
-
-# Callback for when reconnected
-def reconnected(controller: Controller) -> None:
-    """Testing"""
-    controller.sleep_timer = 30
-    controller.remove_listener(reconnected)
-
-    print("Successfully reconnected")
-    controller.sleep_timer = 0
+        for zone in ctrl.zones:
+            zone_target = zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode.value
+            print(f"Name {zone.name} type:{zone.type.value} temp:{zone.temp_current} " +
+                  f"target:{zone_target}")
 
 
-    task.cancel()
+    async def notify(self):
+        async with self.condition:
+            self.condition.notify()
 
+    def controller_discovered(self, ctrl):
+        self.ctrl = ctrl
+        self.loop.create_task(self.notify())
+
+    def controller_reconnected(self, ctrl):
+        self.loop.create_task(self.notify())
+
+    async def test_async(self):
+        self.loop = asyncio.get_event_loop()
+
+        self.condition = Condition()
+        async with discovery(self):
+
+            async with self.condition:
+                await self.condition.wait()
+
+            self.dump_data()
+
+            # test setting values
+            await self.ctrl.set_mode(Controller.Mode.COOL)
+
+            Controller.CONNECT_RETRY_TIMEOUT = 2
+
+            self.ctrl._ip = 'bababa' # pylint: disable=protected-access
+            try:
+                await self.ctrl.set_sleep_timer(30)
+                assert False, "Should be unreachable code"
+            except ConnectionError:
+                pass
+
+            # Should reconnect here
+            async with self.condition:
+                await self.condition.wait()
+
+            await self.ctrl.set_mode(Controller.Mode.HEAT)
+
+            self.dump_data()
+
+TEST = TestListener()
 loop: AbstractEventLoop = asyncio.get_event_loop()
-
-task: Task = loop.create_task(discovery(discovered))
-
-loop.run_until_complete(task)
-
-loop.run_until_complete(asyncio.sleep(600))
+loop.run_until_complete(loop.create_task(TestListener().test_async()))

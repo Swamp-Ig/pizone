@@ -5,4 +5,6 @@ Interaction mostly through the Controller and Zone classes.
 
 from .controller import Controller
 from .zone import Zone
-from .discovery import DiscoveredListener, discovery
+from .discovery import Listener, AbstractDiscoveryService, discovery
+
+__ALL__ = [Controller, Zone, AbstractDiscoveryService, discovery]

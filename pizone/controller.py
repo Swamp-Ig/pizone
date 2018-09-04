@@ -1,15 +1,12 @@
 """Controller module"""
 
 import asyncio
-from asyncio import AbstractEventLoop, Task
+from asyncio import Condition
 from enum import Enum
-import json
 import logging
-from typing import List, Dict, Union, Any, Callable, Optional
+from typing import List, Dict, Union, Any
 
-import aiohttp # type: ignore
-from aiohttp import ClientSession # type: ignore
-import requests
+import aiohttp
 
 from .zone import Zone
 
@@ -32,8 +29,6 @@ class Controller:
         HIGH = 'high'
         AUTO = 'auto'
 
-    Listener = Callable[['Controller'], None]
-
     DictValue = Union[str, int, float]
     ControllerData = Dict[str, DictValue]
 
@@ -42,11 +37,6 @@ class Controller:
 
     CONNECT_RETRY_TIMEOUT = 20
     """Cool-down period for retrying to connect to the controller"""
-
-    loop: AbstractEventLoop
-    session: ClientSession
-
-    _retry_task: Optional[Task]
 
     _VALID_FAN_MODES: Dict[str, List[Fan]] = {
         'disabled' : [Fan.LOW, Fan.MED, Fan.HIGH],
@@ -80,23 +70,18 @@ class Controller:
         self.fan_modes: List[Controller.Fan] = []
         self._system_settings: Controller.ControllerData = {}
 
-        self._listeners: List[Controller.Listener] = []
-
-        self._retry_task = None
         self._fail_exception = None
+        self._reconnect_condition = Condition()
 
+    async def initialize(self) -> None:
+        """Initialize the controller, does not complete until the system is initialised."""
+        await self._refresh_system(notify=False)
 
-    def add_listener(self, listener: Listener) -> None:
-        """Add a listener for the system updated event"""
-        self._listeners.append(listener)
+        self.fan_modes = Controller._VALID_FAN_MODES[str(self._system_settings['FanAuto'])]
 
-    def remove_listener(self, listener: Listener) -> None:
-        """Remove listener"""
-        self._listeners.remove(listener)
-
-    def _fire_listeners(self) -> None:
-        for listener in self._listeners:
-            listener(self)
+        zone_count = int(self._system_settings['NoOfZones'])
+        self.zones = [Zone(self, i) for i in range(zone_count)]
+        await self._refresh_zones(notify=False)
 
     @property
     def device_ip(self) -> str:
@@ -114,69 +99,75 @@ class Controller:
         return self._get_system_state('SysOn') == 'on'
 
     @state.setter
-    def state(self, value: bool) -> None:
-        self._set_system_state('SysOn', 'SystemON', 'on' if value else 'off')
+    async def state(self, value: bool) -> None:
+        await self._set_system_state('SysOn', 'SystemON', 'on' if value else 'off')
 
     @property
     def mode(self) -> 'Mode':
         """System mode, cooling, heating, etc"""
         return self.Mode(self._get_system_state('SysMode'))
 
-    @mode.setter
-    def mode(self, value: Mode):
-        self._set_system_state('SysMode', 'SystemMODE', value.value)
+    async def set_mode(self, value: Mode):
+        """Set system mode, cooling, heating, etc
+        Async method, await to ensure command revieved by system.
+        """
+        await self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
     def fan(self) -> 'Fan':
-        """The fan level. Not all fan modes are allowed.
+        """The current fan level."""
+        return self.Fan(self._get_system_state('SysFan'))
+
+    async def set_fan(self, value: Fan) -> None:
+        """The fan level. Not all fan modes are allowed depending on the system.
+        Async method, await to ensure command revieved by system.
         Raises:
             AttributeError: On setting if the argument value is not valid
         """
-        return self.Fan(self._get_system_state('SysFan'))
-
-    @fan.setter
-    def fan(self, value: Fan) -> None:
         if value not in self.fan_modes:
             raise AttributeError("Fan mode {} not allowed".format(value.value))
-        self._set_system_state('SysFan', 'SystemFAN', value.value,
-                               'medium' if value is Controller.Fan.MED else value.value)
+        await self._set_system_state('SysFan', 'SystemFAN', value.value,
+                                     'medium' if value is Controller.Fan.MED else value.value)
 
     @property
     def sleep_timer(self) -> int:
+        """Current setting for the sleep timer."""
+        return int(self._get_system_state('SleepTimer'))
+
+    async def set_sleep_timer(self, value: int):
         """The sleep timer.
         Valid settings are 0, 30, 60, 90, 120
+        Async method, await to ensure command revieved by system.
         Raises:
             AttributeError: On setting if the argument value is not valid
         """
-        return int(self._get_system_state('SleepTimer'))
-
-    @sleep_timer.setter
-    def sleep_timer(self, value: int):
         time = int(value)
         if time < 0 or time > 120 or time % 30 != 0:
             raise AttributeError(
                 'Invalid Sleep Timer \"{}\", must be divisible by 30'.format(value))
-        self._set_system_state('SleepTimer', 'SleepTimer', value, time)
+        await self._set_system_state('SleepTimer', 'SleepTimer', value, time)
 
     @property
     def free_air_enabled(self) -> bool:
         """Test if the system has free air system available"""
-        return self._get_system_state('FreeAir') == 'disabled'
+        return self._get_system_state('FreeAir') != 'disabled'
 
     @property
     def free_air(self) -> bool:
         """True if the free air system is turned on. False if unavailable or off
-        Raises:
-            AttributeError: If attempting to set the state of the free air system
-                when it is not available.
         """
         return self._get_system_state('FreeAir') == 'on'
 
-    @free_air.setter
-    def free_air(self, value: bool) -> None:
+    async def set_free_air(self, value: bool) -> None:
+        """Turn the free air system on or off.
+        Async method, await to ensure command revieved by system.
+        Raises:
+            AttributeError: If attempting to set the state of the free air system
+                when it is not enabled.
+        """
         if not self.free_air_enabled:
             raise AttributeError('Free air is disabled')
-        self._set_system_state('FreeAir', 'FreeAir', 'on' if value else 'off')
+        await self._set_system_state('FreeAir', 'FreeAir', 'on' if value else 'off')
 
     @property
     def temp_supply(self) -> float:
@@ -188,21 +179,25 @@ class Controller:
         """AC unit setpoint temperature.
         This is the unit target temp with with rasMode == RAS,
         or with rasMode == master and ctrlZone == 13.
+        """
+        return float(self._get_system_state('Setpoint'))
+
+    async def set_temp_setpoint(self, value: float):
+        """AC unit setpoint temperature.
+        This is the unit target temp with with rasMode == RAS,
+        or with rasMode == master and ctrlZone == 13.
         Args:
             value: Valid settings are between ecoMin and ecoMax, at 0.5 degree units.
         Raises:
             AttributeError: On setting if the argument value is not valid.
                 Can still be set even if the mode isn't appropriate.
         """
-        return float(self._get_system_state('Setpoint'))
-
-    @temp_setpoint.setter
-    def temp_setpoint(self, value: float) -> None:
         if value % 0.5 != 0:
             raise AttributeError('SetPoint \'{}\' not rounded to nearest 0.5'.format(value))
         if value < self.temp_min or value > self.temp_max:
             raise AttributeError('SetPoint \'{}\' is out of range'.format(value))
-        self._set_system_state('Setpoint', 'UnitSetpoint', value, str(value))
+        await self._set_system_state('Setpoint', 'UnitSetpoint', value, str(value))
+
 
     @property
     def temp_return(self) -> float:
@@ -261,17 +256,6 @@ class Controller:
         """
         return self._get_system_state('SysType')
 
-    async def initialize(self, session: ClientSession) -> None:
-        """Initialize the controller, does not complete until the system is initialised."""
-        self.session = session
-        self.loop = session.loop
-
-        await self._refresh_system(notify=False)
-        zone_count = int(self._system_settings['NoOfZones'])
-        self.zones = [Zone(self, i) for i in range(zone_count)]
-        self.fan_modes = Controller._VALID_FAN_MODES[str(self._system_settings['FanAuto'])]
-        await self._refresh_zones(notify=False)
-
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
         values: Controller.ControllerData = await self._get_resource('SystemSettings')
@@ -283,13 +267,13 @@ class Controller:
         self._system_settings = values
 
         if notify:
-            self._fire_listeners()
+            self._discovery.controller_update(self)
 
     async def _refresh_zones(self, notify: bool = True) -> None:
         """Refresh the Zone information."""
         zones = int(self._system_settings['NoOfZones'])
         await asyncio.gather(*[self._refresh_zone_group(i, notify)
-                               for i in range(0, zones, 4)], loop=self.loop)
+                               for i in range(0, zones, 4)])
 
     async def _refresh_zone_group(self, group: int, notify: bool = True):
         assert group in [0, 4, 8]
@@ -299,72 +283,66 @@ class Controller:
             zone_data = zone_data_part[i]
             self.zones[i+group]._update_zone(zone_data, notify) #pylint: disable=protected-access
 
-    def update_address(self, address):
+    async def _trigger_reconnect(self):
+        async with self._reconnect_condition:
+            self._reconnect_condition.notify()
+
+    def _refresh_address(self, address):
         """Called from discovery to update the address"""
         if self._ip == address:
             return
         self._ip = address
-        if self._retry_task:
-            self._retry_task.cancel()
+        # Signal to the retry connection loop to have another go.
+        if self._fail_exception:
+            self._discovery.create_task(self._trigger_reconnect())
 
     def _get_system_state(self, state):
         self._ensure_connected()
         return self._system_settings[state]
 
-    def _set_system_state(self, state, command, value, send=None):
+    async def _set_system_state(self, state, command, value, send=None):
         if send is None:
             send = value
         if self._system_settings[state] == value:
             return
-        def callback():
-            self._fire_listeners()
-        self._send_command(command, send)
+        await self._send_command_async(command, send)
         self._system_settings[state] = value
 
     def _ensure_connected(self) -> None:
-        if self._retry_task:
+        if self._fail_exception:
             raise ConnectionError("Unable to connect to the controller") from self._fail_exception
 
     def _failed_connection(self, ex):
-        self._fail_exception = ex
-        if self._retry_task:
+        if self._fail_exception:
+            self._fail_exception = ex
             return
-        _LOG.warning("Server not connected. uid=%s, error: %s ", self.device_uid, ex.__repr__())
-        self._retry_task = self.loop.create_task(self._retry_connection())
-
+        self._fail_exception = ex
+        self._discovery.controller_disconnected(self, ex)
+        self._discovery.create_task(self._retry_connection())
 
     async def _retry_connection(self) -> None:
         while True:
-            self._discovery.rescan()
-            # sleep will get cancelled if the discovery rescan is successful
-            try:
-                await asyncio.sleep(Controller.CONNECT_RETRY_TIMEOUT)
-            except asyncio.CancelledError:
-                _LOG.info("Sleep cancelled")
+            await self._discovery.rescan()
+
+            # event will be fired if reconnected
+            async with self._reconnect_condition:
+                await asyncio.wait_for(self._reconnect_condition.wait(),
+                                       Controller.CONNECT_RETRY_TIMEOUT)
 
             _LOG.info("Attempting to reconnect to server uid=%s ip=%s",
                       self.device_uid, self.device_ip)
+
             try:
-                # On the off-chance of a cancel while refreshing, just try again.
-                while True:
-                    try:
-                        await asyncio.gather(self._refresh_system(notify=False),
-                                             self._refresh_zones(notify=False),
-                                             loop=self.loop)
-                        break
-                    except asyncio.CancelledError:
-                        _LOG.info("Refresh cancelled, refreshing again.")
+                await asyncio.gather(self._refresh_system(notify=False),
+                                     self._refresh_zones(notify=False))
 
-                _LOG.warning("Successfully reconnected to server uid=%s", self.device_uid)
-                self._retry_task = None
+                self._fail_exception = None
 
-                def fire_all_listeners() -> None:
-                    self._fire_listeners()
-                    for zone in self.zones:
-                        zone._fire_listeners() # pylint: disable=protected-access
-
-                self.loop.call_soon(fire_all_listeners)
-                return
+                self._discovery.controller_reconnected(self)
+                self._discovery.controller_update(self)
+                for zone in self.zones:
+                    self._discovery.zone_update(self, zone)
+                break
             except ConnectionError as ex:
                 # Expected, just carry on.
                 _LOG.warning("Reconnect attempt for uid=%s failed with exception: %s",
@@ -372,41 +350,23 @@ class Controller:
 
     async def _get_resource(self, resource: str):
         try:
-            async with self.session.get('http://%s/%s' % (self.device_ip, resource),
-                                        timeout=Controller.REQUEST_TIMEOUT) as response:
+            session = self._discovery.session
+            async with session.get('http://%s/%s' % (self.device_ip, resource),
+                                   timeout=Controller.REQUEST_TIMEOUT) as response:
                 return await response.json()
-        except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as ex:
+        except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
 
-    def _send_command(self, command: str, data: Any):
-        if False:
-            self.loop.create_task(self._send_command_async(command, data))
-
-        if True:
-            # Do this synchonously. For some reason, this doesn't work with aiohttp
-            body = {command : data}
-            url = f"http://{self.device_ip}/{command}"
-            try:
-                with requests.post(url,
-                                   timeout=Controller.REQUEST_TIMEOUT,
-                                   data=json.dumps(body)) as response:
-                    response.raise_for_status()
-            except requests.exceptions.RequestException as ex:
-                self._failed_connection(ex)
-                raise ex
-
     async def _send_command_async(self, command: str, data: Any):
-        # This isn't currently working. See: https://github.com/aio-libs/aiohttp/issues/3208
         body = {command : data}
         url = f"http://{self.device_ip}/{command}"
         try:
-            async with self.session.post(url,
-                                        timeout=Controller.REQUEST_TIMEOUT,
-                                        headers={ "Connection" : "keep-alive:" },
-                                        json=body) as response:
+            session = self._discovery.session
+            async with session.post(url,
+                                    timeout=Controller.REQUEST_TIMEOUT,
+                                    json=body) as response:
                 response.raise_for_status()
-            await asyncio.sleep(1)
-        except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as ex:
+        except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
-            raise ex
+            raise ConnectionError("Unable to connect to the controller") from ex

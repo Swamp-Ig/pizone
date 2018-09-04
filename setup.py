@@ -14,7 +14,7 @@ setup(
     long_description=LONG_DESCRIPTION,
     long_description_content_type="text/markdown",
     url="https://github.com/Swamp-Ig/pizone",
-    install_requires=['requests>=2.0'],
+    install_requires=['aiohttp>=3.4'],
     packages=find_packages(exclude=['tests', 'tests.*']),
     classifiers=(
         "Development Status :: 4 - Beta",

@@ -1,15 +1,18 @@
 """iZone device discovery."""
 
+from abc import abstractmethod
 import asyncio
-from asyncio import DatagramProtocol, DatagramTransport, AbstractEventLoop, Task
+from asyncio import DatagramProtocol, DatagramTransport, AbstractEventLoop, Task, Condition, Future
+from contextlib import AbstractContextManager
 import logging
 from logging import Logger
 import socket
-from typing import Dict, List, Callable, Optional
+from typing import Dict, List, Optional
 
-from aiohttp import ClientSession # type: ignore
+from aiohttp import ClientSession
 
 from .controller import Controller
+from .zone import Zone
 
 DISCOVERY_MSG = b'IASD'
 DISCOVERY_PORT = 12107
@@ -23,24 +26,94 @@ CHANGED_SCHEDULES = b'iZoneChanged_Schedules'
 DISCOVERY_TIMEOUT: float = 2
 DISCOVERY_SLEEP: float = 5*60
 
-DiscoveredListener = Callable[[Controller], None]
-
 _LOG: Logger = logging.getLogger('pizone.discovery')
 
-class DiscoveryProtocol(DatagramProtocol):
+class LogExceptions(AbstractContextManager):
+    """Utility context manager to log and discard exceptions"""
+    def __init__(self, func: str) -> None:
+        self.func = func
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type:
+            _LOG.exception("Exception ignored when calling listener %s", self.func)
+        return True
+
+
+class Listener:
+    """Base class for listeners for iZone updates"""
+
+    def controller_discovered(self, ctrl: Controller) -> None:
+        """
+        New controller discovered. This will also be called for all
+        existing controllers if a new listener is registered
+        """
+        pass
+
+    def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
+        """
+        Connection lost to controller. Exception argument will show reason why.
+        """
+        pass
+
+    def controller_reconnected(self, ctrl: Controller) -> None:
+        """
+        Reconnected to controller.
+        """
+        pass
+
+    def controller_update(self, ctrl: Controller) -> None:
+        """Called when a system update message is recieved from the controller.
+        Controller data will be set to new value.
+        """
+        pass
+
+    def zone_update(self, ctrl: Controller, zone: Zone) -> None:
+        """Called when a zone update message is recieved from the controller
+        Zone data will be set to new value.
+        """
+        pass
+
+
+class AbstractDiscoveryService:
+    """Interface for discovery. This service is both a context manager, and an asynchronous
+    context manager. When used in the context manager version, the start discovery and close
+    will be called automatically when opening and closing the context respectively.
+    """
+
+    @abstractmethod
+    def add_listener(self, listener: Listener) -> None:
+        """Add a listener. All existing controllers will be passed to the listener."""
+        pass
+
+    @abstractmethod
+    def remove_listener(self, listener: Listener) -> None:
+        """Remove a listener"""
+        pass
+
+    @abstractmethod
+    async def start_discovery(self) -> None:
+        """Async version to start discovery.
+        Will return once discovery is started, but before any controllers are found."""
+
+    @abstractmethod
+    async def rescan(self) -> None:
+        """Trigger rescan for new controllers / update IP addresses of existing controllers.
+        Returns immediately, listener will be called with any new controllers or if reconnected.
+        """
+        pass
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Stop discovery and close all connections"""
+        pass
+
+    @property
+    def is_closed(self) -> bool:
+        """Return true if closed"""
+        pass
+
+class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     """Discovery protocol class. Not for external use."""
-
-    controllers: Dict[str, Controller]
-
-    running: bool
-
-    loop: AbstractEventLoop
-    session: ClientSession
-
-    transport: DatagramTransport
-    sock: socket.socket
-
-    scan_task: Task
 
     def __init__(self, loop: AbstractEventLoop = None,
                  session: ClientSession = None) -> None:
@@ -48,9 +121,9 @@ class DiscoveryProtocol(DatagramProtocol):
         raises:
             RuntimeError: If attempted to start the protocol when it is already running.
         """
-        self.controllers = {}
-        self.discovered_listeners: List[Callable] = []
-        self.running = True
+        self._controllers: Dict[str, Controller] = {}
+        self._listeners: List[Listener] = []
+        self._closing = False
 
         _LOG.info("Starting discovery protocol")
         if not loop:
@@ -67,62 +140,150 @@ class DiscoveryProtocol(DatagramProtocol):
             assert session.loop is loop, "Passed client session does not share the same loop"
             self.session = session
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self.sock.bind(('', UPDATE_PORT))
-        self.loop.create_task(self.loop.create_datagram_endpoint(lambda: self, sock=self.sock))
+        self._sock: Optional[socket.socket] = None
+        self._transport: Optional[DatagramTransport] = None
 
+        self._scan_condition: Condition = Condition(loop=self.loop)
 
-    async def __aenter__(self) -> 'DiscoveryProtocol':
+        self._tasks: List[Future] = []
+
+    # Async context manager interface
+    async def __aenter__(self) -> AbstractDiscoveryService:
+        await self.start_discovery()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_value, traceback):
         await self.close()
 
-    async def close(self):
-        """Close the transport"""
-        self.scan_task.cancel()
-        self.transport.close()
+    # managing the task list.
+    def create_task(self, coro) -> Task:
+        """Create a task in the event loop. Keeps track of created tasks."""
+        task: Task = self.loop.create_task(coro)
+        self._tasks.append(task)
+        return task
 
-    def add_listener(self, listener: DiscoveredListener) -> None:
+    # Non-context versions of starting.
+    async def start_discovery(self) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self._sock.bind(('', UPDATE_PORT))
+
+        await self.loop.create_datagram_endpoint(lambda: self, sock=self._sock)
+
+    # Listeners.
+    def add_listener(self, listener: Listener) -> None:
         """Add a discovered listener. All existing controllers will be passed to the listener."""
+        self._listeners.append(listener)
         def callback():
-            self.discovered_listeners.append(listener)
-            for controller in self.controllers.values():
+            for controller in self._controllers.values():
                 listener(controller)
         self.loop.call_soon(callback)
 
-    def connection_made(self, transport):
-        self.transport = transport
-        assert self.loop
-        if not self.session:
-            self.session = ClientSession()
-        self.scan_task = self.loop.create_task(self._scan_loop())
+    def remove_listener(self, listener: Listener) -> None:
+        """Remove a listener"""
+        self._listeners.remove(listener)
+
+    def controller_discovered(self, ctrl: Controller) -> None:
+        _LOG.info("New controller found: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip)
+        for listener in self._listeners:
+            with LogExceptions("controller_discovered"):
+                listener.controller_discovered(ctrl)
+
+    def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
+        _LOG.warning("Connection to controller lost: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip)
+        for listener in self._listeners:
+            with LogExceptions("controller_disconnected"):
+                listener.controller_disconnected(ctrl, ex)
+
+    def controller_reconnected(self, ctrl: Controller) -> None:
+        _LOG.warning("Controller reconnected: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip)
+        for listener in self._listeners:
+            with LogExceptions("controller_reconnected"):
+                listener.controller_reconnected(ctrl)
+
+    def controller_update(self, ctrl: Controller) -> None:
+        for listener in self._listeners:
+            with LogExceptions("controller_update"):
+                listener.controller_update(ctrl)
+
+    def zone_update(self, ctrl: Controller, zone: Zone) -> None:
+        for listener in self._listeners:
+            with LogExceptions("zone_update"):
+                listener.zone_update(ctrl, zone)
+
+    def connection_made(self, transport: DatagramTransport) -> None: # type: ignore
+        if self._closing:
+            transport.close()
+            return
+        assert not self._transport, "Another connection made"
+
+        self._transport = transport
+        self.create_task(self._scan_loop())
 
     async def _scan_loop(self) -> None:
         while True:
             _LOG.info("Sending discovery message")
-            self.transport.sendto(DISCOVERY_MSG, (DISCOVERY_ADDRESS, DISCOVERY_PORT))
-            # This can throw a cancelled error
-            try:
-                await asyncio.sleep(DISCOVERY_SLEEP, loop=self.loop)
-            except asyncio.CancelledError:
+            assert self._transport, "Should be impossible"
+            self._transport.sendto(DISCOVERY_MSG, (DISCOVERY_ADDRESS, DISCOVERY_PORT))
+
+            async with self._scan_condition:
+                await asyncio.wait_for(self._scan_condition.wait(), DISCOVERY_SLEEP)
+
+            if self._closing:
                 return
 
-    def rescan(self) -> None:
-        """Manually rescan for new controllers / update IP addresses of existing controllers."""
+            # Tidy up the task list
+            dones, _ = await asyncio.wait(self._tasks, timeout=0)
+
+            for done in dones:
+                self._tasks.remove(done)
+
+    async def rescan(self) -> None:
+        if self.is_closed:
+            raise ConnectionError("Already closed")
         _LOG.debug("Manual rescan of controllers triggered.")
-        assert self.scan_task
-        self.scan_task.cancel()
-        self.scan_task = self.loop.create_task(self._scan_loop())
+        async with self._scan_condition:
+            self._scan_condition.notify()
+
+    # Closing the connection
+    async def close(self) -> None:
+        """Close the transport"""
+        if self._closing:
+            return
+        assert self._transport, "Should be impossible"
+        self._closing = True
+        self._transport.close()
+        async with self._scan_condition:
+            self._scan_condition.notify()
+
+    def connection_lost(self, exc):
+        if not self._closing:
+            _LOG.exception("Connection Lost unexpectedly", exc_info=exc)
+            self.create_task(self.close())
+        if self._sock:
+            self._sock.close()
+
+    @property
+    def is_closed(self) -> bool:
+        if self._transport:
+            return self._transport.is_closing()
+        return self._closing
+
+    def error_received(self, exc):
+        _LOG.exception("Exception raised and passed to error_recieved:", exc_info=exc)
+        if not self._closing:
+            self.create_task(self.close())
 
     def _find_by_addr(self, addr: str) -> Optional[Controller]:
-        for _, ctrl in self.controllers.items():
+        for _, ctrl in self._controllers.items():
             if ctrl.device_ip == addr:
                 return ctrl
         return None
 
     def datagram_received(self, data, addr):
+        if self._closing:
+            return
+
         if data in (DISCOVERY_MSG, CHANGED_SCHEDULES):
             # ignore
             pass
@@ -140,7 +301,7 @@ class DiscoveryProtocol(DatagramProtocol):
     def _discovery_recieved(self, data):
         message = data.decode().split(',')
         if len(message) < 4 or message[0] != 'ASPort_12107' or message[3] != 'iZone':
-            print("Invalid Message Received:", data.decode())
+            _LOG.warning("Invalid Message Received: %s", data.decode())
             return
         if message[3] != 'iZone':
             return
@@ -148,48 +309,30 @@ class DiscoveryProtocol(DatagramProtocol):
         device_uid = message[1].split('_')[1]
         address = message[2].split('_')[1]
 
-        if device_uid not in self.controllers:
+        if device_uid not in self._controllers:
             # Create new controller.
             # We don't have to set the loop here since it's set for
             # the thread already.
-            _LOG.info("New controller found: id=%s ip=%s", device_uid, address)
             controller = Controller(self, device_uid=device_uid, device_ip=address)
 
             def callback(task: Task):
-                self.controllers[device_uid] = controller
-                for listener in self.discovered_listeners:
-                    self.loop.call_soon(listener, controller)
+                self._controllers[device_uid] = controller
+                self.controller_discovered(controller)
 
-            result: Task = self.loop.create_task(controller.initialize(self.session))
+            result: Task = self.create_task(controller.initialize())
             result.add_done_callback(callback)
         else:
-            controller = self.controllers[device_uid]
-            if controller.device_ip != address: # pylint: disable=protected-access
-                _LOG.info("Device address update: id=%s  ip=%s", device_uid, address)
-                self.loop.call_soon(controller.update_address, address)
+            controller = self._controllers[device_uid]
+            controller._refresh_address(address) # pylint: disable=protected-access
 
-    def error_received(self, exc):
-        _LOG.exception("Exception raised and passed to error_recieved:", exc_info=exc)
-        self.transport.close()
-
-    def connection_lost(self, exc):
-        pass
-
-
-async def discovery(*listeners: DiscoveredListener,
-                    loop: AbstractEventLoop = None,
-                    session: ClientSession = None) -> None:
-    """
-    Entry point to the pizone connector.
-    This coroutine will run indefinitely until the coroutine is cancelled.
-    """
-    async with DiscoveryProtocol(loop=loop, session=session) as protocol:
-        for listener in listeners:
-            protocol.add_listener(listener)
-        while True:
-            # sleep loop indefinitely. If the task running this coroutine is
-            # cancelled, discovery will tidy up.
-            try:
-                await asyncio.sleep(5*60)
-            except asyncio.CancelledError:
-                return
+def discovery(*listeners: Listener,
+              loop: AbstractEventLoop = None,
+              session: ClientSession = None) -> AbstractDiscoveryService:
+    """Create discovery service. Returned object is a context manager and asynchronous
+    context manager so can be used with async with.
+    Alternately call start_discovery or start_discovery_async to commence the discovery
+    process."""
+    service = DiscoveryService(loop=loop, session=session)
+    for listener in listeners:
+        service.add_listener(listener)
+    return service
