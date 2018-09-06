@@ -261,3 +261,4 @@ __pycache__/
 *.pyc
 /env
 /.mypy_cache
+/.pytest_cache

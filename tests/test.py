@@ -2,6 +2,7 @@
 
 import asyncio
 from asyncio import AbstractEventLoop, Condition
+import unittest
 
 from pizone import Listener, Zone, Controller, discovery
 
@@ -69,6 +70,12 @@ class TestListener(Listener):
 
             self.dump_data()
 
-TEST = TestListener()
-loop: AbstractEventLoop = asyncio.get_event_loop()
-loop.run_until_complete(loop.create_task(TestListener().test_async()))
+
+class TestController(unittest.TestCase):
+
+    def test_controller(self):
+        loop: AbstractEventLoop = asyncio.get_event_loop()
+        loop.run_until_complete(loop.create_task(TestListener().test_async()))
+
+if __name__ == '__main__':
+    unittest.main()
