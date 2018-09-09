@@ -1,18 +1,36 @@
 """Test for controller"""
 
 import asyncio
-from asyncio import AbstractEventLoop, Condition
+from asyncio import Condition
 import unittest
+from typing import Optional
 
-from pizone import Listener, Zone, Controller, discovery
+from aiounittest import AsyncTestCase
+
+from pizone import Controller, Listener, Zone, discovery
 
 # pylint: disable=missing-docstring
 
-class TestListener(Listener):
+class TestListener(Listener, AsyncTestCase):
     """Test Listener"""
-    condition: Condition
-    ctrl: Controller
-    loop: AbstractEventLoop
+
+    async def notify(self):
+        assert self.condition
+        async with self.condition:
+            self.condition.notify()
+
+    def controller_discovered(self, ctrl):
+        self.ctrl = ctrl
+        self.loop.create_task(self.notify())
+
+    def controller_reconnected(self, ctrl):
+        self.loop.create_task(self.notify())
+
+    def setUp(self):
+        "Hook method for setting up the test fixture before exercising it."
+        self.loop = None
+        self.condition: Optional[Condition] = None
+        self.ctrl = None
 
     def dump_data(self):
         """Testing"""
@@ -27,24 +45,11 @@ class TestListener(Listener):
             print(f"Name {zone.name} type:{zone.type.value} temp:{zone.temp_current} " +
                   f"target:{zone_target}")
 
-
-    async def notify(self):
-        async with self.condition:
-            self.condition.notify()
-
-    def controller_discovered(self, ctrl):
-        self.ctrl = ctrl
-        self.loop.create_task(self.notify())
-
-    def controller_reconnected(self, ctrl):
-        self.loop.create_task(self.notify())
-
     async def test_async(self):
         self.loop = asyncio.get_event_loop()
+        self.condition = Condition(loop=self.loop)
 
-        self.condition = Condition()
         async with discovery(self):
-
             async with self.condition:
                 await self.condition.wait()
 
@@ -69,13 +74,6 @@ class TestListener(Listener):
             await self.ctrl.set_mode(Controller.Mode.HEAT)
 
             self.dump_data()
-
-
-class TestController(unittest.TestCase):
-
-    def test_controller(self):
-        loop: AbstractEventLoop = asyncio.get_event_loop()
-        loop.run_until_complete(loop.create_task(TestListener().test_async()))
 
 if __name__ == '__main__':
     unittest.main()
