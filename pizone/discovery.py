@@ -319,7 +319,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
                 self._controllers[device_uid] = controller
                 self.controller_discovered(controller)
 
-            result: Task = self.create_task(controller.initialize())
+            result: Task = self.create_task(controller._initialize())  # pylint: disable=protected-access
             result.add_done_callback(callback)
         else:
             controller = self._controllers[device_uid]
