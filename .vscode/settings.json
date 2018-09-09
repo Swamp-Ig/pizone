@@ -4,8 +4,12 @@
     "python.unitTest.unittestEnabled": true,
     "python.unitTest.nosetestsEnabled": false,
     "python.unitTest.pyTestEnabled": false,
+    "python.linting.enabled": true,
+    "python.linting.ignorePatterns": [
+        ".vscode/**/*.py",
+        "**/site-packages/**/*.py"
+    ],
     "python.linting.pylintEnabled": true,
     "python.linting.mypyEnabled": true,
-    "python.linting.enabled": true,
     "python.terminal.activateEnvironment": true
 }
