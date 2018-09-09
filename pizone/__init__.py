@@ -7,4 +7,4 @@ from .controller import Controller
 from .zone import Zone
 from .discovery import Listener, AbstractDiscoveryService, discovery
 
-__ALL__ = [Controller, Zone, AbstractDiscoveryService, discovery]
+__ALL__ = [Controller, Zone, AbstractDiscoveryService, Listener, discovery]
