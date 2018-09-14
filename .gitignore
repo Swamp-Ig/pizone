@@ -260,5 +260,7 @@ paket-files/
 __pycache__/
 *.pyc
 /env
+/venv
 /.mypy_cache
 /.pytest_cache
+/*.egg-info
