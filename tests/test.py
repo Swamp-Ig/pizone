@@ -37,7 +37,7 @@ class TestListener(Listener, AsyncTestCase):
         ctrl = self.ctrl
         print(ctrl.device_ip)
         print(ctrl.device_uid)
-        print(f"supply={ctrl.temp_supply} mode={ctrl.mode} isOn={ctrl.state}")
+        print(f"supply={ctrl.temp_supply} mode={ctrl.mode} isOn={ctrl.is_on}")
         print(f"sleep_timer={ctrl.sleep_timer}")
 
         for zone in ctrl.zones:
@@ -56,7 +56,7 @@ class TestListener(Listener, AsyncTestCase):
             self.dump_data()
 
             # test setting values
-            await self.ctrl.set_mode(Controller.Mode.COOL)
+            await self.ctrl.set_mode(Controller.Mode.AUTO)
 
             Controller.CONNECT_RETRY_TIMEOUT = 2
 

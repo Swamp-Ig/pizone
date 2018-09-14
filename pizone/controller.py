@@ -1,12 +1,14 @@
 """Controller module"""
 
 import asyncio
+import json
+import logging
 from asyncio import Condition
 from enum import Enum
-import logging
-from typing import List, Dict, Union, Any
+from typing import Any, Dict, List, Union
 
 import aiohttp
+import requests
 
 from .zone import Zone
 
@@ -21,6 +23,7 @@ class Controller:
         VENT = 'vent'
         DRY = 'dry'
         AUTO = 'auto'
+        FREE_AIR = 'free_air'
 
     class Fan(Enum):
         """All fan modes"""
@@ -94,24 +97,37 @@ class Controller:
         return self._device_uid
 
     @property
-    def state(self) -> bool:
+    def discovery(self) -> 'AbstractDiscoveryService':
+        return self._discovery
+
+    @property
+    def is_on(self) -> bool:
         """True if the system is turned on"""
         return self._get_system_state('SysOn') == 'on'
 
-    @state.setter
-    async def state(self, value: bool) -> None:
+    async def set_on(self, value: bool) -> None:
+        """Turn the system on or off."""
         await self._set_system_state('SysOn', 'SystemON', 'on' if value else 'off')
 
     @property
     def mode(self) -> 'Mode':
         """System mode, cooling, heating, etc"""
+        if self.free_air:
+            return self.Mode.FREE_AIR
         return self.Mode(self._get_system_state('SysMode'))
 
     async def set_mode(self, value: Mode):
         """Set system mode, cooling, heating, etc
         Async method, await to ensure command revieved by system.
         """
-        await self._set_system_state('SysMode', 'SystemMODE', value.value)
+        if value == self.Mode.FREE_AIR:
+            if self.free_air:
+                return
+            if not self.free_air_enabled:
+                raise AttributeError("Free air system is not enabled")
+            await self.set_free_air(True)
+        else:
+            await self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
     def fan(self) -> 'Fan':
@@ -361,12 +377,26 @@ class Controller:
     async def _send_command_async(self, command: str, data: Any):
         body = {command : data}
         url = f"http://{self.device_ip}/{command}"
-        try:
-            session = self._discovery.session
-            async with session.post(url,
-                                    timeout=Controller.REQUEST_TIMEOUT,
-                                    json=body) as response:
-                response.raise_for_status()
-        except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
-            self._failed_connection(ex)
-            raise ConnectionError("Unable to connect to the controller") from ex
+        _LOG.info("Sending to URL: %s command: %s", url, json.dumps(body))
+        if False:
+            try:
+                session = self._discovery.session
+                async with session.post(url,
+                                        timeout=Controller.REQUEST_TIMEOUT,
+                                        json=body) as response:
+                    response.raise_for_status()
+            except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
+                self._failed_connection(ex)
+                raise ConnectionError("Unable to connect to the controller") from ex
+        else:
+            # Do this synchonously. For some reason, this doesn't work with aiohttp
+            body = {command : data}
+            url = f"http://{self.device_ip}/{command}"
+            try:
+                with requests.post(url,
+                                   timeout=Controller.REQUEST_TIMEOUT,
+                                   data=json.dumps(body)) as response:
+                    response.raise_for_status()
+            except requests.exceptions.RequestException as ex:
+                self._failed_connection(ex)
+                raise ex
