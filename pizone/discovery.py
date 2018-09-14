@@ -112,6 +112,11 @@ class AbstractDiscoveryService:
         """Return true if closed"""
         pass
 
+    @property
+    def controllers(self) -> Dict[str, Controller]:
+        """Dictionary of all the currently discovered controllers"""
+        pass
+
 class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     """Discovery protocol class. Not for external use."""
 
@@ -136,6 +141,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 
         if not session:
             self.session = ClientSession(loop=self.loop)
+            self._own_session = True
         else:
             assert session.loop is loop, "Passed client session does not share the same loop"
             self.session = session
@@ -211,6 +217,11 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             with LogExceptions("zone_update"):
                 listener.zone_update(ctrl, zone)
 
+    @property
+    def controllers(self) -> Dict[str, Controller]:
+        """Dictionary of all the currently discovered controllers"""
+        return self._controllers
+
     def connection_made(self, transport: DatagramTransport) -> None: # type: ignore
         if self._closing:
             transport.close()
@@ -255,6 +266,11 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self._transport.close()
         async with self._scan_condition:
             self._scan_condition.notify()
+
+        await asyncio.gather(*self._tasks)
+
+        if self._own_session:
+            await self.session.close()
 
     def connection_lost(self, exc):
         if not self._closing:
