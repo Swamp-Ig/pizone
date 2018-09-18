@@ -102,6 +102,10 @@ class Zone:
             return
 
         await self._send_zone_command(value)
+        # This needs to be sent twice to work
+        if self.mode != Zone.Mode.AUTO:
+            await self._send_zone_command(value)
+        
         self._zone_data['SetPoint'] = value
         self._zone_data['Mode'] = Zone.Mode.AUTO.value
         self._fire_listeners()
@@ -140,7 +144,7 @@ class Zone:
         return self._zone_data[state]
 
     async def _send_zone_command(self, data: Union[str, float]):
-        send_data = {'ZoneNo': str(self._index), 'Command' : str(data)}
+        send_data = {'ZoneNo': str(self._index+1), 'Command' : str(data)}
         # pylint: disable=protected-access
-        await self._controller._send_command('ZoneCommand', send_data)
+        await self._controller._send_command_async('ZoneCommand', send_data)
         # pylint: enable=protected-access
