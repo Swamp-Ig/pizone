@@ -76,7 +76,7 @@ class Controller:
         self._fail_exception = None
         self._reconnect_condition = Condition()
 
-    async def _initialize(self) -> None:
+    async def _initialize(self) -> bool:
         """Initialize the controller, does not complete until the system is initialised."""
         await self._refresh_system(notify=False)
 
@@ -120,13 +120,15 @@ class Controller:
         """Set system mode, cooling, heating, etc
         Async method, await to ensure command revieved by system.
         """
-        if value == self.Mode.FREE_AIR:
+        if value == Controller.Mode.FREE_AIR:
             if self.free_air:
                 return
             if not self.free_air_enabled:
                 raise AttributeError("Free air system is not enabled")
             await self.set_free_air(True)
         else:
+            if self.free_air:
+                await self.set_free_air(False)
             await self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
@@ -275,7 +277,6 @@ class Controller:
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
         values: Controller.ControllerData = await self._get_resource('SystemSettings')
-
         if self._device_uid != values['AirStreamDeviceUId']:
             _LOG.error("_refresh_system called with unmatching device ID")
             return
@@ -399,4 +400,4 @@ class Controller:
                     response.raise_for_status()
             except requests.exceptions.RequestException as ex:
                 self._failed_connection(ex)
-                raise ex
+                raise ConnectionError("Unable to connect to the controller") from ex

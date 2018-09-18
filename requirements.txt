@@ -1,2 +1,4 @@
 aiohttp>3.4
+requests
+netifaces
 aiounittest

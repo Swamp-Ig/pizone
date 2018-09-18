@@ -1,22 +1,24 @@
 """iZone device discovery."""
 
-from abc import abstractmethod
 import asyncio
-from asyncio import DatagramProtocol, DatagramTransport, AbstractEventLoop, Task, Condition, Future
-from contextlib import AbstractContextManager
 import logging
-from logging import Logger
 import socket
+from abc import abstractmethod
+from asyncio import (AbstractEventLoop, Condition, DatagramProtocol,
+                     DatagramTransport, Future, Task)
+from contextlib import AbstractContextManager
+from logging import Logger
 from typing import Dict, List, Optional
 
 from aiohttp import ClientSession
+
+import netifaces
 
 from .controller import Controller
 from .zone import Zone
 
 DISCOVERY_MSG = b'IASD'
 DISCOVERY_PORT = 12107
-DISCOVERY_ADDRESS = '<broadcast>'
 
 UPDATE_PORT = 7005
 CHANGED_SYSTEM = b'iZoneChanged_System'
@@ -145,8 +147,9 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         else:
             assert session.loop is loop, "Passed client session does not share the same loop"
             self.session = session
+            self._own_session = False
 
-        self._sock: Optional[socket.socket] = None
+        self._socket: Optional[socket.socket] = None
         self._transport: Optional[DatagramTransport] = None
 
         self._scan_condition: Condition = Condition(loop=self.loop)
@@ -161,20 +164,20 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self.close()
 
+    def _task_done_callback(self, task):
+        #_LOG.debug("Task done %s", task)
+        if task.exception():
+            _LOG.exception("Uncaught exception", exc_info=task.exception())
+        self._tasks.remove(task)
+
     # managing the task list.
     def create_task(self, coro) -> Task:
         """Create a task in the event loop. Keeps track of created tasks."""
         task: Task = self.loop.create_task(coro)
         self._tasks.append(task)
+
+        task.add_done_callback(self._task_done_callback)
         return task
-
-    # Non-context versions of starting.
-    async def start_discovery(self) -> None:
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self._sock.bind(('', UPDATE_PORT))
-
-        await self.loop.create_datagram_endpoint(lambda: self, sock=self._sock)
 
     # Listeners.
     def add_listener(self, listener: Listener) -> None:
@@ -182,7 +185,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self._listeners.append(listener)
         def callback():
             for controller in self._controllers.values():
-                listener(controller)
+                listener.controller_discovered(controller)
         self.loop.call_soon(callback)
 
     def remove_listener(self, listener: Listener) -> None:
@@ -222,6 +225,12 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         """Dictionary of all the currently discovered controllers"""
         return self._controllers
 
+    # Non-context versions of starting.
+    async def start_discovery(self) -> None:
+        await self.loop.create_datagram_endpoint(lambda: self, 
+            local_addr=('0.0.0.0', UPDATE_PORT),
+            allow_broadcast=True)
+
     def connection_made(self, transport: DatagramTransport) -> None: # type: ignore
         if self._closing:
             transport.close()
@@ -231,23 +240,37 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self._transport = transport
         self.create_task(self._scan_loop())
 
-    async def _scan_loop(self) -> None:
-        while True:
-            _LOG.info("Sending discovery message")
-            assert self._transport, "Should be impossible"
-            self._transport.sendto(DISCOVERY_MSG, (DISCOVERY_ADDRESS, DISCOVERY_PORT))
+    async def _await_scan(self) -> None:
+        async with self._scan_condition:
+            await self._scan_condition.wait()
 
-            async with self._scan_condition:
-                await asyncio.wait_for(self._scan_condition.wait(), DISCOVERY_SLEEP)
+    def _get_broadcasts(self):
+        for ifAddr in map(netifaces.ifaddresses, netifaces.interfaces()):
+            inetAddrs = ifAddr.get(netifaces.AF_INET)
+            if not inetAddrs:
+                continue
+            for inetAddr in inetAddrs:
+                broadcast = inetAddr.get('broadcast')
+                if broadcast:
+                    yield broadcast
+
+    async def _scan_loop(self) -> None:
+        assert self._transport, "Should be impossible"
+        
+        while True:
+            for broadcast in self._get_broadcasts():
+                _LOG.debug("Sending discovery message to addr %s", broadcast)
+                self._transport.sendto(DISCOVERY_MSG, (broadcast, DISCOVERY_PORT))
+ 
+            try:
+                await asyncio.wait_for(
+                    asyncio.Task(self._await_scan()),
+                    timeout=DISCOVERY_SLEEP)
+            except asyncio.TimeoutError:
+                pass
 
             if self._closing:
                 return
-
-            # Tidy up the task list
-            dones, _ = await asyncio.wait(self._tasks, timeout=0)
-
-            for done in dones:
-                self._tasks.remove(done)
 
     async def rescan(self) -> None:
         if self.is_closed:
@@ -261,9 +284,13 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         """Close the transport"""
         if self._closing:
             return
+        _LOG.info("Close called on discovery service.")
         assert self._transport, "Should be impossible"
         self._closing = True
+
+        # Close the transport and the socket.
         self._transport.close()
+
         async with self._scan_condition:
             self._scan_condition.notify()
 
@@ -273,11 +300,10 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             await self.session.close()
 
     def connection_lost(self, exc):
+        _LOG.debug("Connection Lost")
         if not self._closing:
             _LOG.exception("Connection Lost unexpectedly", exc_info=exc)
             self.create_task(self.close())
-        if self._sock:
-            self._sock.close()
 
     @property
     def is_closed(self) -> bool:
@@ -292,11 +318,18 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 
     def _find_by_addr(self, addr: str) -> Optional[Controller]:
         for _, ctrl in self._controllers.items():
-            if ctrl.device_ip == addr:
+            if ctrl.device_ip == addr[0]:
                 return ctrl
         return None
 
+    async def _wrap_update(self, coro):
+        try:
+            await coro
+        except ConnectionError as ex:
+            _LOG.warning("Unable to complete %s due to connection error", coro, exc_info=ex)
+
     def datagram_received(self, data, addr):
+        _LOG.debug("Datagram Recieved %s", data)
         if self._closing:
             return
 
@@ -305,12 +338,14 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             pass
         elif data == CHANGED_SYSTEM:
             ctrl = self._find_by_addr(addr)
-            if ctrl:
-                self.loop.create_task(ctrl._refresh_system()) # pylint: disable=protected-access
+            if not ctrl:
+                return
+            self.create_task(self._wrap_update(ctrl._refresh_system())) # pylint: disable=protected-access
         elif data == CHANGED_ZONES:
             ctrl = self._find_by_addr(addr)
-            if ctrl:
-                self.loop.create_task(ctrl._refresh_zones()) # pylint: disable=protected-access
+            if not ctrl:
+                return
+            self.create_task(self._wrap_update(ctrl._refresh_zones())) # pylint: disable=protected-access
         else:
             self._discovery_recieved(data)
 
@@ -332,6 +367,9 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             controller = Controller(self, device_uid=device_uid, device_ip=address)
 
             def callback(task: Task):
+                if task.exception():
+                    _LOG.warning("Unable to connect to newly discovered controller", exc_info=task.exception())
+                    return
                 self._controllers[device_uid] = controller
                 self.controller_discovered(controller)
 
