@@ -149,7 +149,6 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             self.session = session
             self._own_session = False
 
-        self._socket: Optional[socket.socket] = None
         self._transport: Optional[DatagramTransport] = None
 
         self._scan_condition: Condition = Condition(loop=self.loop)
@@ -287,8 +286,6 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         _LOG.info("Close called on discovery service.")
         assert self._transport, "Should be impossible"
         self._closing = True
-
-        # Close the transport and the socket.
         self._transport.close()
 
         async with self._scan_condition:
@@ -382,8 +379,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 def discovery(*listeners: Listener,
               loop: AbstractEventLoop = None,
               session: ClientSession = None) -> AbstractDiscoveryService:
-    """Create discovery service. Returned object is a context manager and asynchronous
-    context manager so can be used with async with.
+    """Create discovery service. Returned object is a asynchronous
+    context manager so can be used with 'async with' statement.
     Alternately call start_discovery or start_discovery_async to commence the discovery
     process."""
     service = DiscoveryService(loop=loop, session=session)
