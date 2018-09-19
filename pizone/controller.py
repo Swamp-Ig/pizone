@@ -76,7 +76,7 @@ class Controller:
         self._fail_exception = None
         self._reconnect_condition = Condition()
 
-    async def _initialize(self) -> bool:
+    async def _initialize(self) -> None:
         """Initialize the controller, does not complete until the system is initialised."""
         await self._refresh_system(notify=False)
 
