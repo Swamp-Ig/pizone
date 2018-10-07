@@ -6,8 +6,8 @@ with open("README.md", "r") as fh:
     LONG_DESCRIPTION = fh.read()
 
 setup(
-    name="pizone",
-    version="1.3.0",
+    name="python-izone",
+    version="1.0.0",
     author="Penny Wood",
     author_email="pypl@ninjateaparty.com",
     description="A python interface to the iZone airconditioner controller",
