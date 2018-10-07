@@ -101,14 +101,17 @@ class Zone:
         if self._zone_data['SetPoint'] == value:
             return
 
-        await self._send_zone_command(value)
-        # This needs to be sent twice to work
-        if self.mode != Zone.Mode.AUTO:
+        async with self._controller._sending_lock:
+            if self.mode != Zone.Mode.AUTO:
+                await self._send_zone_command(self.temp_setpoint)
+            # This needs to be sent twice to work
             await self._send_zone_command(value)
-        
-        self._zone_data['SetPoint'] = value
-        self._zone_data['Mode'] = Zone.Mode.AUTO.value
-        self._fire_listeners()
+            
+            # need to refresh immediatley after updating
+            try:     
+                await self._controller._refresh_zone_group(self._index - self._index % 4)
+            except ConnectionError:
+                pass
 
     async def set_mode(self, value: Mode) -> None:
         """Set the current zone mode.
@@ -120,14 +123,19 @@ class Zone:
         if self.type == Zone.Type.CONST:
             raise AttributeError('Can\'t set mode on constant zone.')
 
-        if value == Zone.Mode.AUTO:
-            if self.type != Zone.Type.AUTO:
-                raise AttributeError('Can\'t use auto mode on open/close zone.')
-            await self._send_zone_command(self.temp_setpoint)
-        else:
-            await self._send_zone_command(value.value)
-        self._zone_data['Mode'] = value.value
-        self._fire_listeners()
+        async with self._controller._sending_lock:
+            if value == Zone.Mode.AUTO:
+                if self.type != Zone.Type.AUTO:
+                    raise AttributeError('Can\'t use auto mode on open/close zone.')
+                await self._send_zone_command(self.temp_setpoint)
+            else:
+                await self._send_zone_command(value.value)
+
+            # need to refresh immediatley after updating
+            try:     
+                await self._controller._refresh_zone_group(self._index - self._index % 4)
+            except ConnectionError:
+                pass
 
     def _update_zone(self, zone_data, notify: bool = True):
         if zone_data['Index'] != self._index:
@@ -145,6 +153,4 @@ class Zone:
 
     async def _send_zone_command(self, data: Union[str, float]):
         send_data = {'ZoneNo': str(self._index+1), 'Command' : str(data)}
-        # pylint: disable=protected-access
-        await self._controller._send_command_async('ZoneCommand', send_data)
-        # pylint: enable=protected-access
+        await self._controller._send_command_async('ZoneCommand', send_data) 

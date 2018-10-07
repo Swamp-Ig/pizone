@@ -3,12 +3,13 @@
 import asyncio
 import json
 import logging
-from asyncio import Condition
+from asyncio import Condition, Lock
 from enum import Enum
 from typing import Any, Dict, List, Union
 
 import aiohttp
 import requests
+from async_timeout import timeout
 
 from .zone import Zone
 
@@ -76,6 +77,8 @@ class Controller:
         self._fail_exception = None
         self._reconnect_condition = Condition()
 
+        self._sending_lock = Lock()
+
     async def _initialize(self) -> None:
         """Initialize the controller, does not complete until the system is initialised."""
         await self._refresh_system(notify=False)
@@ -125,10 +128,11 @@ class Controller:
                 return
             if not self.free_air_enabled:
                 raise AttributeError("Free air system is not enabled")
-            await self.set_free_air(True)
+            await self._set_system_state('FreeAir', 'FreeAir', 'on')
         else:
             if self.free_air:
-                await self.set_free_air(False)
+                await self._set_system_state('FreeAir', 'FreeAir', 'off')
+                await asyncio.sleep(0.5)
             await self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
@@ -322,8 +326,15 @@ class Controller:
             send = value
         if self._system_settings[state] == value:
             return
-        await self._send_command_async(command, send)
-        self._system_settings[state] = value
+
+        async with self._sending_lock:
+            await self._send_command_async(command, send)
+            
+            # Need to refresh immediately after setting.
+            try:
+                await self._refresh_system()
+            except ConnectionError:
+                pass
 
     def _ensure_connected(self) -> None:
         if self._fail_exception:
@@ -341,10 +352,13 @@ class Controller:
         while True:
             await self._discovery.rescan()
 
-            # event will be fired if reconnected
-            async with self._reconnect_condition:
-                await asyncio.wait_for(self._reconnect_condition.wait(),
-                                       Controller.CONNECT_RETRY_TIMEOUT)
+            try:
+                async with timeout(Controller.CONNECT_RETRY_TIMEOUT):
+                    # event will be fired if reconnected
+                    async with self._reconnect_condition:
+                        await self._reconnect_condition.wait()
+            except asyncio.TimeoutError:
+                pass
 
             _LOG.info("Attempting to reconnect to server uid=%s ip=%s",
                       self.device_uid, self.device_ip)
