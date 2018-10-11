@@ -300,7 +300,7 @@ class Controller:
         assert group in [0, 4, 8]
         zone_data_part = await self._get_resource(f"Zones{group+1}_{group+4}")
 
-        for i in range(4):
+        for i in range(min(len(self.zones)-group, 4)):
             zone_data = zone_data_part[i]
             self.zones[i+group]._update_zone(zone_data, notify) #pylint: disable=protected-access
 
