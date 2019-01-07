@@ -8,7 +8,6 @@ from enum import Enum
 from typing import Any, Dict, List, Union
 
 import aiohttp
-import requests
 from async_timeout import timeout
 
 from .zone import Zone
