@@ -391,27 +391,62 @@ class Controller:
 
     async def _send_command_async(self, command: str, data: Any):
         body = {command : data}
-        url = f"http://{self.device_ip}/{command}"
-        _LOG.info("Sending to URL: %s command: %s", url, json.dumps(body))
-        if False:
-            try:
-                session = self._discovery.session
-                async with session.post(url,
-                                        timeout=Controller.REQUEST_TIMEOUT,
-                                        json=body) as response:
-                    response.raise_for_status()
-            except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
-                self._failed_connection(ex)
-                raise ConnectionError("Unable to connect to the controller") from ex
-        else:
-            # Do this synchonously. For some reason, this doesn't work with aiohttp
-            body = {command : data}
-            url = f"http://{self.device_ip}/{command}"
-            try:
-                with requests.post(url,
-                                   timeout=Controller.REQUEST_TIMEOUT,
-                                   data=json.dumps(body)) as response:
-                    response.raise_for_status()
-            except requests.exceptions.RequestException as ex:
-                self._failed_connection(ex)
-                raise ConnectionError("Unable to connect to the controller") from ex
+        _LOG.info("POST to host: %s command: %s", self.device_ip, json.dumps(body))
+
+        # For some reason aiohttp fragments post requests, which causes the server
+        # to fail disgracefully. Implimented rough and dirty HTTP POST client.
+        class _PostProtocol(asyncio.Protocol):
+            def __init__(self, host, target, data, on_complete):
+                body = json.dumps(data)
+                self.message = (
+                    "POST " + target + " HTTP/1.1\r\n" +
+                    "Host: " + host +"\r\n" +
+                    "Content-Length: " + str(len(body)) + "\r\n" +
+                    "\r\n" + body)
+
+                self.on_complete = on_complete
+
+            def connection_made(self, transport):
+                transport.write(self.message.encode())
+                self.transport = transport
+
+            def data_received(self, data):
+                self.transport.close()
+                response: str = data.decode()
+                lines = response.split('\r\n', 1)
+                if not lines:
+                    return
+                parts = lines[0].split(' ')
+                if(len(parts) != 3):
+                    return
+                if int(parts[1]) != 200:
+                    self.on_complete.set_exception(
+                        aiohttp.ClientResponseError(None, None, 
+                                                    status=int(parts[1]),
+                                                    message=parts[2]))
+                else:
+                    self.on_complete.set_result(True)
+
+        try:
+            loop = asyncio.get_event_loop()
+            on_complete = loop.create_future()
+
+            async with timeout(Controller.REQUEST_TIMEOUT) as cm:
+                transport, _ = await loop.create_connection(
+                    lambda: _PostProtocol(self.device_ip, '/' + command, 
+                                          body, on_complete), 
+                                          self.device_ip, 80)
+
+                # wait for response to be recieved.
+                await on_complete
+
+            if cm.expired:
+                if transport:
+                    transport.close()
+                raise asyncio.TimeoutError()
+
+            on_complete.result()
+
+        except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
+            self._failed_connection(ex)
+            raise ConnectionError("Unable to connect to controller") from ex
