@@ -7,7 +7,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="python-izone",
-    version="1.0.1",
+    version="1.0.3",
     author="Penny Wood",
     author_email="pypl@ninjateaparty.com",
     description="A python interface to the iZone airconditioner controller",
@@ -17,11 +17,11 @@ setup(
     install_requires=['aiohttp>=3.4', 'requests', 'netifaces'],
     tests_require=['aiounittest'],
     packages=find_packages(exclude=['tests', 'tests.*']),
-    classifiers=(
+    classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
         "Operating System :: OS Independent",
-    ),
+    ],
 )
