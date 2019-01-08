@@ -348,10 +348,10 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 
     def _discovery_recieved(self, data):
         message = data.decode().split(',')
-        if len(message) < 4 or message[0] != 'ASPort_12107' or message[3] != 'iZone':
+        if len(message) < 3 or message[0] != 'ASPort_12107':
             _LOG.warning("Invalid Message Received: %s", data.decode())
             return
-        if message[3] != 'iZone':
+        if len(message) > 3 and message[3] != 'iZone':
             return
 
         device_uid = message[1].split('_')[1]
