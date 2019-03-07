@@ -1,5 +1,6 @@
 {
-    "python.pythonPath": "${workspaceFolder}\\env\\Scripts\\python.exe",
+    "python.pythonPath": "env\\Scripts\\python.exe",
+    "terminal.integrated.shell.windows": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     "python.unitTest.unittestArgs": ["-v", "-s", "tests", "-p", "*test*.py"],
     "python.unitTest.unittestEnabled": true,
     "python.unitTest.nosetestsEnabled": false,
