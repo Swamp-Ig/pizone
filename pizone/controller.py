@@ -41,12 +41,12 @@ class Controller:
     CONNECT_RETRY_TIMEOUT = 20
     """Cool-down period for retrying to connect to the controller"""
 
-    _VALID_FAN_MODES: Dict[str, List[Fan]] = {
+    _VALID_FAN_MODES = {
         'disabled' : [Fan.LOW, Fan.MED, Fan.HIGH],
         '3-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         '2-speed' : [Fan.LOW, Fan.HIGH, Fan.AUTO],
         'var-speed' : [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
-        }
+        } # type: Dict[str, List[Fan]]
 
     def __init__(self, discovery, device_uid: str, device_ip: str) -> None:
         """Create a controller interface. Usually this is called from the discovery service.
@@ -69,9 +69,9 @@ class Controller:
         self._discovery = discovery
         self._device_uid = device_uid
 
-        self.zones: List[Zone] = []
-        self.fan_modes: List[Controller.Fan] = []
-        self._system_settings: Controller.ControllerData = {}
+        self.zones = [] # type: List[Zone]
+        self.fan_modes = [] # type: List[Controller.Fan]
+        self._system_settings = {} # type: Controller.ControllerData
 
         self._fail_exception = None
         self._reconnect_condition = Condition()
@@ -99,7 +99,7 @@ class Controller:
         return self._device_uid
 
     @property
-    def discovery(self) -> 'AbstractDiscoveryService':
+    def discovery(self):
         return self._discovery
 
     @property
@@ -279,7 +279,7 @@ class Controller:
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
-        values: Controller.ControllerData = await self._get_resource('SystemSettings')
+        values = await self._get_resource('SystemSettings') # type: Controller.ControllerData
         if self._device_uid != values['AirStreamDeviceUId']:
             _LOG.error("_refresh_system called with unmatching device ID")
             return
@@ -297,7 +297,7 @@ class Controller:
 
     async def _refresh_zone_group(self, group: int, notify: bool = True):
         assert group in [0, 4, 8]
-        zone_data_part = await self._get_resource(f"Zones{group+1}_{group+4}")
+        zone_data_part = await self._get_resource("Zones{0}_{1}".format(group+1, group+4))
 
         for i in range(min(len(self.zones)-group, 4)):
             zone_data = zone_data_part[i]
@@ -411,7 +411,7 @@ class Controller:
 
             def data_received(self, data):
                 self.transport.close()
-                response: str = data.decode()
+                response = data.decode() # type: str
                 lines = response.split('\r\n', 1)
                 if not lines:
                     return

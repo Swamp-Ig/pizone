@@ -6,8 +6,8 @@ import socket
 from abc import abstractmethod
 from asyncio import (AbstractEventLoop, Condition, DatagramProtocol,
                      DatagramTransport, Future, Task)
-from contextlib import AbstractContextManager
 from logging import Logger
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from aiohttp import ClientSession
@@ -25,15 +25,18 @@ CHANGED_SYSTEM = b'iZoneChanged_System'
 CHANGED_ZONES = b'iZoneChanged_Zones'
 CHANGED_SCHEDULES = b'iZoneChanged_Schedules'
 
-DISCOVERY_TIMEOUT: float = 2
-DISCOVERY_SLEEP: float = 5*60
+DISCOVERY_TIMEOUT = 2 # type: float
+DISCOVERY_SLEEP = 5*60 # type: float
 
-_LOG: Logger = logging.getLogger('pizone.discovery')
+_LOG = logging.getLogger('pizone.discovery') # type: Logger
 
-class LogExceptions(AbstractContextManager):
+class LogExceptions:
     """Utility context manager to log and discard exceptions"""
     def __init__(self, func: str) -> None:
         self.func = func
+
+    def __enter__(self):
+        return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type:
@@ -128,8 +131,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         raises:
             RuntimeError: If attempted to start the protocol when it is already running.
         """
-        self._controllers: Dict[str, Controller] = {}
-        self._listeners: List[Listener] = []
+        self._controllers = {} # type: Dict[str, Controller]
+        self._listeners = [] # type: List[Listener]
         self._closing = False
 
         _LOG.info("Starting discovery protocol")
@@ -149,11 +152,11 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             self.session = session
             self._own_session = False
 
-        self._transport: Optional[DatagramTransport] = None
+        self._transport = None # type: Optional[DatagramTransport]
 
-        self._scan_condition: Condition = Condition(loop=self.loop)
+        self._scan_condition = Condition(loop=self.loop) # type: Condition
 
-        self._tasks: List[Future] = []
+        self._tasks = [] # type: List[Future]
 
     # Async context manager interface
     async def __aenter__(self) -> AbstractDiscoveryService:
@@ -172,7 +175,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     # managing the task list.
     def create_task(self, coro) -> Task:
         """Create a task in the event loop. Keeps track of created tasks."""
-        task: Task = self.loop.create_task(coro)
+        task = self.loop.create_task(coro) # type: Task
         self._tasks.append(task)
 
         task.add_done_callback(self._task_done_callback)
@@ -370,7 +373,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
                 self._controllers[device_uid] = controller
                 self.controller_discovered(controller)
 
-            result: Task = self.create_task(controller._initialize())  # pylint: disable=protected-access
+            result = self.create_task(controller._initialize())  # type: Task  # pylint: disable=protected-access
             result.add_done_callback(callback)
         else:
             controller = self._controllers[device_uid]

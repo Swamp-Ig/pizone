@@ -29,7 +29,7 @@ class TestListener(Listener, AsyncTestCase):
     def setUp(self):
         "Hook method for setting up the test fixture before exercising it."
         self.loop = None
-        self.condition: Optional[Condition] = None
+        self.condition = None # type: Optional[Condition]
         self.ctrl = None
 
     def dump_data(self):
@@ -37,13 +37,12 @@ class TestListener(Listener, AsyncTestCase):
         ctrl = self.ctrl
         print(ctrl.device_ip)
         print(ctrl.device_uid)
-        print(f"supply={ctrl.temp_supply} mode={ctrl.mode} isOn={ctrl.is_on}")
-        print(f"sleep_timer={ctrl.sleep_timer}")
+        print("supply={0} mode={1} isOn={2}".format(ctrl.temp_supply, ctrl.mode, ctrl.is_on))
+        print("sleep_timer={0}".format(ctrl.sleep_timer))
 
         for zone in ctrl.zones:
             zone_target = zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode.value
-            print(f"Name {zone.name} type:{zone.type.value} temp:{zone.temp_current} " +
-                  f"target:{zone_target}")
+            print("Name {0} type:{1} temp:{2} target:{3}".format(zone.name, zone.type.value, zone.temp_current, zone_target))
 
     async def test_async(self):
         self.loop = asyncio.get_event_loop()

@@ -31,7 +31,7 @@ class Zone:
     ZoneData = Dict[str, DictValue]
 
     def __init__(self, controller, index: int) -> None:
-        self._zone_data: Dict = {}
+        self._zone_data = {} # type: Dict
         self._index = index
         self._controller = controller
 
