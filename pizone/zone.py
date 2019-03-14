@@ -120,9 +120,6 @@ class Zone:
         'close' – the zone is currently closed
         'auto' – the zone is currently in temperature control mode
         """
-        if self.type == Zone.Type.CONST:
-            raise AttributeError('Can\'t set mode on constant zone.')
-
         async with self._controller._sending_lock:
             if value == Zone.Mode.AUTO:
                 if self.type != Zone.Type.AUTO:
