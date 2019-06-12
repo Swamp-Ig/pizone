@@ -262,8 +262,10 @@ __pycache__/
 /env
 /venv
 /.venv
-/.mypy_cache
+.mypy_cache
 /.pytest_cache
 /*.egg-info
 /build
 /dist
+/.coverage
+/htmlcov

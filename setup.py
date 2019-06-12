@@ -1,13 +1,13 @@
 """Setup package"""
 
-from setuptools import setup, find_packages # type: ignore
+from setuptools import setup, find_packages  # type: ignore
 
 with open("README.md", "r") as fh:
     LONG_DESCRIPTION = fh.read()
 
 setup(
     name="python-izone",
-    version="1.1.0",
+    version="1.1.1",
     author="Penny Wood",
     author_email="pypl@ninjateaparty.com",
     description="A python interface to the iZone airconditioner controller",
@@ -21,7 +21,8 @@ setup(
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+        "License :: OSI Approved :: "
+            "GNU General Public License v3 or later (GPLv3+)",
         "Operating System :: OS Independent",
     ],
 )
