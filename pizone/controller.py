@@ -5,7 +5,7 @@ import json
 import logging
 from asyncio import Lock
 from enum import Enum
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
 import aiohttp
 from async_timeout import timeout
@@ -202,17 +202,17 @@ class Controller:
             'FreeAir', 'FreeAir', 'on' if value else 'off')
 
     @property
-    def temp_supply(self) -> float:
+    def temp_supply(self) -> Optional[float]:
         """Current supply, or in duct, air temperature."""
-        return float(self._get_system_state('Supply'))
+        return float(self._get_system_state('Supply')) or None
 
     @property
-    def temp_setpoint(self) -> float:
+    def temp_setpoint(self) -> Optional[float]:
         """AC unit setpoint temperature.
         This is the unit target temp with with rasMode == RAS,
         or with rasMode == master and ctrlZone == 13.
         """
-        return float(self._get_system_state('Setpoint'))
+        return float(self._get_system_state('Setpoint')) or None
 
     async def set_temp_setpoint(self, value: float):
         """AC unit setpoint temperature.
@@ -235,9 +235,9 @@ class Controller:
             'Setpoint', 'UnitSetpoint', value, str(value))
 
     @property
-    def temp_return(self) -> float:
+    def temp_return(self) -> Optional[float]:
         """The return, or room, air temperature"""
-        return float(self._get_system_state('Temp'))
+        return float(self._get_system_state('Temp')) or None
 
     @property
     def eco_lock(self) -> bool:
@@ -399,10 +399,6 @@ class Controller:
                 from ex
 
     async def _send_command_async(self, command: str, data: Any):
-        body = {command: data}
-        _LOG.info(
-            "POST to host: %s command: %s", self.device_ip, json.dumps(body))
-
         # For some reason aiohttp fragments post requests, which causes
         # the server to fail disgracefully. Implimented rough and dirty
         # HTTP POST client.
@@ -412,12 +408,14 @@ class Controller:
 
         class _PostProtocol(asyncio.Protocol):
             def connection_made(self, transport):
-                body = json.dumps(data).encode()
+                body = json.dumps({command: data}).encode()
                 header = (
                     "POST /" + command + " HTTP/1.1\r\n" +
                     "Host: " + device_ip + "\r\n" +
                     "Content-Length: " + str(len(body)) + "\r\n" +
                     "\r\n").encode()
+                _LOG.debug(
+                    "Writing message to " + device_ip + body.decode())
                 transport.write(header + body)
                 self.transport = transport
 

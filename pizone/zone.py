@@ -1,7 +1,12 @@
-"""Zone object. Various properties allow interogation and setting of zone data."""
+"""
+Zone object.
+
+Various properties allow interogation and setting of zone data.
+"""
 
 from enum import Enum
-from typing import Dict, Union
+from typing import Dict, Union, Optional
+
 
 class Zone:
     """Interface to IZone zone"""
@@ -31,7 +36,7 @@ class Zone:
     ZoneData = Dict[str, DictValue]
 
     def __init__(self, controller, index: int) -> None:
-        self._zone_data = {} # type: Dict
+        self._zone_data = {}  # type: Dict
         self._index = index
         self._controller = controller
 
@@ -64,14 +69,14 @@ class Zone:
         return self.Mode(self._get_zone_state('Mode'))
 
     @property
-    def temp_setpoint(self) -> float:
+    def temp_setpoint(self) -> Optional[float]:
         """Temp setpoint in degrees C."""
-        return self._get_zone_state('SetPoint')
+        return self._get_zone_state('SetPoint') or None
 
     @property
-    def temp_current(self) -> float:
+    def temp_current(self) -> Optional[float]:
         """Current zone temperature"""
-        return self._get_zone_state('Temp')
+        return self._get_zone_state('Temp') or None
 
     @property
     def airflow_max(self) -> int:
@@ -93,23 +98,31 @@ class Zone:
             AttributeError if the set point is out of range
         """
         if self.type != Zone.Type.AUTO:
-            raise AttributeError('Can\'t set SetPoint to \'{}\' type zone.'.format(self.type))
+            raise AttributeError(
+                'Can\'t set SetPoint to \'{}\' type zone.'
+                .format(self.type))
         if value % 0.5 != 0:
-            raise AttributeError('SetPoint \'{}\' not rounded to nearest 0.5'.format(value))
-        if value < self._controller.temp_min or value > self._controller.temp_max:
-            raise AttributeError('SetPoint \'{}\' is out of range'.format(value))
+            raise AttributeError(
+                'SetPoint \'{}\' not rounded to nearest 0.5'
+                .format(value))
+        if (value < self._controller.temp_min
+                or value > self._controller.temp_max):
+            raise AttributeError(
+                'SetPoint \'{}\' is out of range'.format(value))
         if self._zone_data['SetPoint'] == value:
             return
 
         async with self._controller._sending_lock:
             if self.mode != Zone.Mode.AUTO:
-                await self._send_zone_command(self.temp_setpoint)
+                await self._send_zone_command(
+                    self._get_zone_state('SetPoint'))
             # This needs to be sent twice to work
             await self._send_zone_command(value)
-            
+
             # need to refresh immediatley after updating
-            try:     
-                await self._controller._refresh_zone_group(self._index - self._index % 4)
+            try:
+                await self._controller._refresh_zone_group(
+                    self._index - self._index % 4)
             except ConnectionError:
                 pass
 
@@ -123,14 +136,17 @@ class Zone:
         async with self._controller._sending_lock:
             if value == Zone.Mode.AUTO:
                 if self.type != Zone.Type.AUTO:
-                    raise AttributeError('Can\'t use auto mode on open/close zone.')
-                await self._send_zone_command(self.temp_setpoint)
+                    raise AttributeError(
+                        'Can\'t use auto mode on open/close zone.')
+                await self._send_zone_command(
+                    self._get_zone_state('SetPoint'))
             else:
                 await self._send_zone_command(value.value)
 
             # need to refresh immediatley after updating
-            try:     
-                await self._controller._refresh_zone_group(self._index - self._index % 4)
+            try:
+                await self._controller._refresh_zone_group(
+                    self._index - self._index % 4)
             except ConnectionError:
                 pass
 
@@ -142,12 +158,12 @@ class Zone:
             self._fire_listeners()
 
     def _fire_listeners(self) -> None:
-        self._controller._discovery.zone_update(self._controller, self) # pylint: disable=protected-access
+        self._controller._discovery.zone_update(self._controller, self)  # pylint: disable=protected-access  # noqa
 
     def _get_zone_state(self, state):
-        self._controller._ensure_connected() # pylint: disable=protected-access
+        self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
         return self._zone_data[state]
 
     async def _send_zone_command(self, data: Union[str, float]):
-        send_data = {'ZoneNo': str(self._index+1), 'Command' : str(data)}
-        await self._controller._send_command_async('ZoneCommand', send_data) 
+        send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
+        await self._controller._send_command_async('ZoneCommand', send_data)
