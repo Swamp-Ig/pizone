@@ -14,6 +14,8 @@ from .zone import Zone
 
 _LOG = logging.getLogger("pizone.controller")
 
+REFRESH_INTERVAL = 25.0
+
 
 class Controller:
     """Interface to IZone controller"""
@@ -49,7 +51,8 @@ class Controller:
         'var-speed': [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         }  # type: Dict[str, List[Fan]]
 
-    def __init__(self, discovery, device_uid: str, device_ip: str) -> None:
+    def __init__(self, discovery, device_uid: str,
+                 device_ip: str, is_v2: bool) -> None:
         """Create a controller interface.
 
         Usually this is called from the discovery service. If neither
@@ -72,6 +75,7 @@ class Controller:
         self._ip = device_ip
         self._discovery = discovery
         self._device_uid = device_uid
+        self._is_v2 = is_v2
 
         self.zones = []  # type: List[Zone]
         self.fan_modes = []  # type: List[Controller.Fan]
@@ -94,6 +98,21 @@ class Controller:
         self.zones = [Zone(self, i) for i in range(zone_count)]
         await self._refresh_zones(notify=False)
         self._initialised = True
+        if self._is_v2:
+            self.discovery.loop.create_task(self._poll_loop())
+
+    async def _poll_loop(self) -> None:
+        while True:
+            await asyncio.sleep(REFRESH_INTERVAL)
+
+            if self._discovery.is_closed:
+                return
+
+            try:
+                await self._refresh_all()
+                _LOG.debug("Polling unit %s.", self._device_uid)
+            except ConnectionError as ex:
+                _LOG.debug("Poll failed due to exeption %s.", repr(ex))
 
     @property
     def device_ip(self) -> str:
@@ -104,6 +123,11 @@ class Controller:
     def device_uid(self) -> str:
         '''UId of the unit'''
         return self._device_uid
+
+    @property
+    def is_v2(self) -> bool:
+        '''True if this is a v2 controller'''
+        return self._is_v2
 
     @property
     def discovery(self):
@@ -297,6 +321,13 @@ class Controller:
         """
         return self._get_system_state('SysType')
 
+    async def _refresh_all(self, notify: bool = True) -> None:
+        zones = int(self._system_settings['NoOfZones'])
+        await asyncio.gather(
+            self._refresh_system(notify),
+            *[self._refresh_zone_group(i, notify)
+              for i in range(0, zones, 4)])
+
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
         values = await self._get_resource('SystemSettings')  # type: Controller.ControllerData  # noqa: E501
@@ -370,9 +401,7 @@ class Controller:
             self.device_uid, self.device_ip)
 
         try:
-            await asyncio.gather(
-                self._refresh_system(notify=False),
-                self._refresh_zones(notify=False))
+            await self._refresh_all(notify=False)
 
             self._fail_exception = None
 
@@ -392,7 +421,7 @@ class Controller:
             async with session.get(
                     'http://%s/%s' % (self.device_ip, resource),
                     timeout=Controller.REQUEST_TIMEOUT) as response:
-                return await response.json()
+                return await response.json(content_type=None)
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") \

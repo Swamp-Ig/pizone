@@ -385,7 +385,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             # Create new controller.
             # We don't have to set the loop here since it's set for
             # the thread already.
-            controller = self._create_controller(device_uid, device_ip)
+            is_v2 = message[3] == 'iZoneV2'
+            controller = self._create_controller(device_uid, device_ip, is_v2)
 
             async def initialize_controller():
                 try:
@@ -404,8 +405,9 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             controller = self._controllers[device_uid]
             controller._refresh_address(device_ip)  # pylint: disable=protected-access  # noqa: E501
 
-    def _create_controller(self, device_uid, device_ip):
-        return Controller(self, device_uid=device_uid, device_ip=device_ip)
+    def _create_controller(self, device_uid, device_ip, is_v2):
+        return Controller(
+            self, device_uid=device_uid, device_ip=device_ip, is_v2=is_v2)
 
 
 def discovery(*listeners: Listener,
