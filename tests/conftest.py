@@ -13,8 +13,8 @@ from pytest import fixture
 
 class MockController(Controller):
 
-    def __init__(self, discovery, device_uid: str, device_ip: str) -> None:
-        super().__init__(discovery, device_uid, device_ip)
+    def __init__(self, discovery, device_uid: str, device_ip: str, is_v2) -> None:
+        super().__init__(discovery, device_uid, device_ip, is_v2)
         from .resources import SYSTEMS
         self.resources = deepcopy(SYSTEMS[device_uid])  # type: Dict[str,Any]
         self.sent = []  # type: List[Tuple[str,Any]]
@@ -65,8 +65,8 @@ class MockDiscoveryService(DiscoveryService):
         self.datagram_received = Mock()  # type: ignore
         self.connected = True
 
-    def _create_controller(self, device_uid, device_ip):
-        return MockController(self, device_uid=device_uid, device_ip=device_ip)
+    def _create_controller(self, device_uid, device_ip, is_v2):
+        return MockController(self, device_uid=device_uid, device_ip=device_ip, is_v2=is_v2)
 
 
 @fixture
@@ -77,6 +77,21 @@ def service(loop):
 
     service._process_datagram(
         b'ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate',
+        ('8.8.8.8', 12107))
+    loop.run_until_complete(sleep(0.1))
+
+    yield service
+
+    loop.run_until_complete(service.close())
+
+@fixture
+def legacy_service(loop):
+    """Fixture to provide a test instance of HASS."""
+    service = MockDiscoveryService(loop)
+    loop.run_until_complete(service.start_discovery())
+
+    service._process_datagram(
+        b'ASPort_12107,Mac_000000001,IP_8.8.8.8',
         ('8.8.8.8', 12107))
     loop.run_until_complete(sleep(0.1))
 

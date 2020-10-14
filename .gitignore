@@ -269,3 +269,4 @@ __pycache__/
 /dist
 /.coverage
 /htmlcov
+.eggs

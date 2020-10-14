@@ -84,6 +84,27 @@ async def test_discovery(service):
     assert controller.mode == Controller.Mode.COOL
 
 
+async def test_legacy_discovery(legacy_service):
+    service = legacy_service
+    
+    assert len(service.controllers) == 1
+    assert '000000001' in service.controllers
+
+    controller = service.controllers['000000001']  # type: Controller
+    assert controller.device_uid == '000000001'
+    assert controller.device_ip == '8.8.8.8'
+    assert controller.mode == Controller.Mode.HEAT
+
+    # Not updated yet
+    await controller.set_mode(Controller.Mode.COOL)
+    assert controller.sent[0] == ('SystemMODE', 'cool')
+    assert controller.mode == Controller.Mode.HEAT
+
+    # Now updated
+    await controller.change_system_state('SysMode', 'cool')
+    assert controller.mode == Controller.Mode.COOL
+
+
 async def test_ip_addr_change(service, caplog):
     controller = service.controllers['000000001']  # type: Controller
     assert controller.device_uid == '000000001'

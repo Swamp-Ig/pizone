@@ -374,7 +374,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     def _discovery_recieved(self, data):
         message = data.decode().split(',')
         if (len(message) < 3 or message[0] != 'ASPort_12107'
-            or not message[3] in ('iZone', 'iZoneV2')):
+            or (len(message) >= 4 and not message[3] in ('iZone', 'iZoneV2'))):
             _LOG.warning("Invalid Message Received: %s", data.decode())
             return
 
@@ -385,7 +385,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             # Create new controller.
             # We don't have to set the loop here since it's set for
             # the thread already.
-            is_v2 = message[3] == 'iZoneV2'
+            is_v2 = len(message) >= 4 and message[3] == 'iZoneV2'
             controller = self._create_controller(device_uid, device_ip, is_v2)
 
             async def initialize_controller():
