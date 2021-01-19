@@ -114,10 +114,11 @@ class Zone:
 
         async with self._controller._sending_lock:
             if self.mode != Zone.Mode.AUTO:
-                await self._send_zone_command(
+                await self._send_command(
+                    'ZoneCommand',
                     self._get_zone_state('SetPoint'))
             # This needs to be sent twice to work
-            await self._send_zone_command(value)
+            await self._send_command('ZoneCommand', value)
 
             # need to refresh immediatley after updating
             try:
@@ -138,10 +139,11 @@ class Zone:
                 if self.type != Zone.Type.AUTO:
                     raise AttributeError(
                         'Can\'t use auto mode on open/close zone.')
-                await self._send_zone_command(
+                await self._send_command(
+                    'ZoneCommand',
                     self._get_zone_state('SetPoint'))
             else:
-                await self._send_zone_command(value.value)
+                await self._send_command('ZoneCommand', value.value)
 
             # need to refresh immediatley after updating
             try:
@@ -164,6 +166,6 @@ class Zone:
         self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
         return self._zone_data[state]
 
-    async def _send_zone_command(self, data: Union[str, float]):
-        send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
-        await self._controller._send_command_async('ZoneCommand', send_data)
+    async def _send_command(self, command, data: Union[str, float]):
+        send_data = {'ZoneNo': str(self._index+1), command: str(data)}
+        await self._controller._send_command_async('Command', send_data)
