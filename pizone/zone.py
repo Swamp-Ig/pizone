@@ -88,6 +88,78 @@ class Zone:
         """Min allowed airflow for the zone as a percent"""
         return self._get_zone_state('MinAir')
 
+   async def set_airflow_min(self, value: int) -> None:
+        """
+        Change the zone airflow min in 5% increments
+        Async method, returns when server has changed mode.
+        Valid values are percent in 5% increments.
+        Raises:
+            AttributeError if the set point is out of range
+        """
+        if self.type != Zone.Type.OPCL:
+            raise AttributeError(
+                'Can\'t set MinAir to \'{}\' type zone.'
+                .format(self.type))
+        if value % 5 != 0:
+            raise AttributeError(
+                'MinAir \'{}\' not rounded to nearest 5'
+                .format(value))
+        if (value < 0
+                or value > 100):
+            raise AttributeError(
+                'MinAir \'{}\' is out of range'.format(value))
+        if self._zone_data['MinAir'] == value:
+            return
+
+        async with self._controller._sending_lock:
+            if self.mode != Zone.Mode.OPCL:
+                await self._send_command(
+                    'AirMinCommand',
+                    self._get_zone_state('MinAir'))
+
+            # need to refresh immediatley after updating
+            try:
+                await self._controller._refresh_zone_group(
+                    self._index - self._index % 4)
+            except ConnectionError:
+                pass
+
+   async def set_airflow_max(self, value: int) -> None:
+        """
+        Change the zone airflow max in 5% increments
+        Async method, returns when server has changed mode.
+        Valid values are percent in 5% increments.
+        Raises:
+            AttributeError if the set point is out of range
+        """
+        if self.type != Zone.Type.OPCL:
+            raise AttributeError(
+                'Can\'t set MaxAir to \'{}\' type zone.'
+                .format(self.type))
+        if value % 5 != 0:
+            raise AttributeError(
+                'MaxAir \'{}\' not rounded to nearest 5'
+                .format(value))
+        if (value < 0
+                or value > 100):
+            raise AttributeError(
+                'MaxAir \'{}\' is out of range'.format(value))
+        if self._zone_data['MaxAir'] == value:
+            return
+
+        async with self._controller._sending_lock:
+            if self.mode != Zone.Mode.OPCL:
+                await self._send_command(
+                    'AirMaxCommand',
+                    self._get_zone_state('MaxAir'))
+
+            # need to refresh immediatley after updating
+            try:
+                await self._controller._refresh_zone_group(
+                    self._index - self._index % 4)
+            except ConnectionError:
+                pass
+
     async def set_temp_setpoint(self, value: float) -> None:
         """
         Change the setpoint for the zone in degrees C.
