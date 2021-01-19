@@ -88,7 +88,7 @@ class Zone:
         """Min allowed airflow for the zone as a percent"""
         return self._get_zone_state('MinAir')
 
-   async def set_airflow_min(self, value: int) -> None:
+    async def set_airflow_min(self, value: int) -> None:
         """
         Change the zone airflow min in 5% increments
         Async method, returns when server has changed mode.
@@ -124,7 +124,7 @@ class Zone:
             except ConnectionError:
                 pass
 
-   async def set_airflow_max(self, value: int) -> None:
+    async def set_airflow_max(self, value: int) -> None:
         """
         Change the zone airflow max in 5% increments
         Async method, returns when server has changed mode.
