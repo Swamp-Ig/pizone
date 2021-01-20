@@ -96,10 +96,6 @@ class Zone:
         Raises:
             AttributeError if the set point is out of range
         """
-        if self.type != Zone.Type.OPCL:
-            raise AttributeError(
-                'Can\'t set MinAir to \'{}\' type zone.'
-                .format(self.type))
         if value % 5 != 0:
             raise AttributeError(
                 'MinAir \'{}\' not rounded to nearest 5'
@@ -112,10 +108,9 @@ class Zone:
             return
 
         async with self._controller._sending_lock:
-            if self.mode != Zone.Mode.OPCL:
-                await self._send_command(
-                    'AirMinCommand',
-                    self._get_zone_state('MinAir'))
+            await self._send_command(
+                'AirMinCommand',
+                self._get_zone_state('MinAir'))
 
             # need to refresh immediatley after updating
             try:
@@ -132,10 +127,6 @@ class Zone:
         Raises:
             AttributeError if the set point is out of range
         """
-        if self.type != Zone.Type.OPCL:
-            raise AttributeError(
-                'Can\'t set MaxAir to \'{}\' type zone.'
-                .format(self.type))
         if value % 5 != 0:
             raise AttributeError(
                 'MaxAir \'{}\' not rounded to nearest 5'
@@ -148,10 +139,9 @@ class Zone:
             return
 
         async with self._controller._sending_lock:
-            if self.mode != Zone.Mode.OPCL:
-                await self._send_command(
-                    'AirMaxCommand',
-                    self._get_zone_state('MaxAir'))
+            await self._send_command(
+                'AirMaxCommand',
+                self._get_zone_state('MaxAir'))
 
             # need to refresh immediatley after updating
             try:
