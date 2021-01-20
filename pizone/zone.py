@@ -229,5 +229,5 @@ class Zone:
         return self._zone_data[state]
 
     async def _send_command(self, command, data: Union[str, float]):
-        send_data = {'ZoneNo': str(self._index+1), command: str(data)}
-        await self._controller._send_command_async('Command', send_data)
+        send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
+        await self._controller._send_command_async(command, send_data)
