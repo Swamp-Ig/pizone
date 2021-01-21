@@ -108,9 +108,7 @@ class Zone:
             return
 
         async with self._controller._sending_lock:
-            await self._send_command(
-                'AirMinCommand',
-                self._get_zone_state('MinAir'))
+            await self._send_command('AirMinCommand', value)
 
             # need to refresh immediatley after updating
             try:
@@ -139,9 +137,7 @@ class Zone:
             return
 
         async with self._controller._sending_lock:
-            await self._send_command(
-                'AirMaxCommand',
-                self._get_zone_state('MaxAir'))
+            await self._send_command('AirMaxCommand', value)
 
             # need to refresh immediatley after updating
             try:
@@ -228,6 +224,6 @@ class Zone:
         self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
         return self._zone_data[state]
 
-    async def _send_command(self, command, data: Union[str, float]):
+    async def _send_command(self, command, data: Union[str, float, int]):
         send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
         await self._controller._send_command_async(command, send_data)
