@@ -88,6 +88,64 @@ class Zone:
         """Min allowed airflow for the zone as a percent"""
         return self._get_zone_state('MinAir')
 
+    async def set_airflow_min(self, value: int) -> None:
+        """
+        Change the zone airflow min in 5% increments
+        Async method, returns when server has changed mode.
+        Valid values are percent in 5% increments.
+        Raises:
+            AttributeError if the set point is out of range
+        """
+        if value % 5 != 0:
+            raise AttributeError(
+                'MinAir \'{}\' not rounded to nearest 5'
+                .format(value))
+        if (value < 0
+                or value > 100):
+            raise AttributeError(
+                'MinAir \'{}\' is out of range'.format(value))
+        if self._zone_data['MinAir'] == value:
+            return
+
+        async with self._controller._sending_lock:
+            await self._send_command('AirMinCommand', value)
+
+            # need to refresh immediatley after updating
+            try:
+                await self._controller._refresh_zone_group(
+                    self._index - self._index % 4)
+            except ConnectionError:
+                pass
+
+    async def set_airflow_max(self, value: int) -> None:
+        """
+        Change the zone airflow max in 5% increments
+        Async method, returns when server has changed mode.
+        Valid values are percent in 5% increments.
+        Raises:
+            AttributeError if the set point is out of range
+        """
+        if value % 5 != 0:
+            raise AttributeError(
+                'MaxAir \'{}\' not rounded to nearest 5'
+                .format(value))
+        if (value < 0
+                or value > 100):
+            raise AttributeError(
+                'MaxAir \'{}\' is out of range'.format(value))
+        if self._zone_data['MaxAir'] == value:
+            return
+
+        async with self._controller._sending_lock:
+            await self._send_command('AirMaxCommand', value)
+
+            # need to refresh immediatley after updating
+            try:
+                await self._controller._refresh_zone_group(
+                    self._index - self._index % 4)
+            except ConnectionError:
+                pass
+
     async def set_temp_setpoint(self, value: float) -> None:
         """
         Change the setpoint for the zone in degrees C.
@@ -114,10 +172,11 @@ class Zone:
 
         async with self._controller._sending_lock:
             if self.mode != Zone.Mode.AUTO:
-                await self._send_zone_command(
+                await self._send_command(
+                    'ZoneCommand',
                     self._get_zone_state('SetPoint'))
             # This needs to be sent twice to work
-            await self._send_zone_command(value)
+            await self._send_command('ZoneCommand', value)
 
             # need to refresh immediatley after updating
             try:
@@ -138,10 +197,11 @@ class Zone:
                 if self.type != Zone.Type.AUTO:
                     raise AttributeError(
                         'Can\'t use auto mode on open/close zone.')
-                await self._send_zone_command(
+                await self._send_command(
+                    'ZoneCommand',
                     self._get_zone_state('SetPoint'))
             else:
-                await self._send_zone_command(value.value)
+                await self._send_command('ZoneCommand', value.value)
 
             # need to refresh immediatley after updating
             try:
@@ -164,6 +224,6 @@ class Zone:
         self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
         return self._zone_data[state]
 
-    async def _send_zone_command(self, data: Union[str, float]):
+    async def _send_command(self, command, data: Union[str, float, int]):
         send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
-        await self._controller._send_command_async('ZoneCommand', send_data)
+        await self._controller._send_command_async(command, send_data)
