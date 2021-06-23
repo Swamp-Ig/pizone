@@ -10,5 +10,6 @@
     "python.linting.pylintEnabled": true,
     "python.linting.flake8Enabled": true,
     "python.linting.mypyEnabled": true,
-    "python.pythonPath": ".venv/bin/python",
+    "python.pythonPath": "venv\\Scripts\\python.exe",
+    "python.globalModuleInstallation": true,
 }
