@@ -1,7 +1,7 @@
 """iZone device discovery."""
 
 import asyncio
-from async_timeout import timeout
+from async_timeout import current_task, timeout
 import logging
 from abc import abstractmethod, ABC
 from asyncio import (AbstractEventLoop, Condition, DatagramProtocol,
@@ -306,7 +306,10 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             await self._close_task
             return
         _LOG.info("Close called on discovery service.")
-        self._close_task = Task.current_task(self.loop)
+        if 'current_task' in asyncio.__dict__.keys():
+            self._close_task = asyncio.current_task(loop=self.loop)
+        else:
+            self._close_task = Task.current_task(loop=self.loop)
         if self._transport:
             self._transport.close()
 
