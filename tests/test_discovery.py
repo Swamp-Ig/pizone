@@ -46,7 +46,7 @@ async def test_fail_on_connect(loop, caplog):
         service._process_datagram(
             b'ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate',
             ('8.8.8.8', 12107))
-        sleep(0)
+        await sleep(0)
 
     assert len(caplog.messages) == 1
     assert caplog.messages[0][:41] == \
@@ -60,7 +60,7 @@ async def test_connection_lost(service, caplog):
 
     assert len(caplog.messages) == 1
     assert caplog.messages[0] == \
-        "Connection Lost unexpectedly: OSError('Nonspecific',)"
+        "Connection Lost unexpectedly: OSError('Nonspecific')"
 
     assert service.is_closed
 
@@ -113,7 +113,7 @@ async def test_ip_addr_change(service, caplog):
     service._process_datagram(
         b'ASPort_12107,Mac_000000001,IP_8.8.8.4,iZone,iLight,iDrate',
         ('8.8.8.4', 12107))
-    sleep(0)
+    await sleep(0)
 
     assert controller.device_ip == '8.8.8.4'
 
