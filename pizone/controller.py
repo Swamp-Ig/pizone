@@ -94,7 +94,7 @@ class Controller:
         await self._refresh_system(notify=False)
 
         self.fan_modes = Controller._VALID_FAN_MODES[
-            str(self._system_settings['FanAuto'])]
+            str(self._system_settings.get('FanAuto', 'disabled'))]
 
         zone_count = int(self._system_settings['NoOfZones'])
         self.zones = [Zone(self, i) for i in range(zone_count)]
