@@ -366,7 +366,7 @@ class Controller:
 
     def _get_system_state(self, state):
         self._ensure_connected()
-        return self._system_settings[state]
+        return self._system_settings.get(state)
 
     async def _set_system_state(self, state, command, value, send=None):
         if send is None:
