@@ -207,13 +207,19 @@ class Controller:
     @property
     def free_air_enabled(self) -> bool:
         """Test if the system has free air system available"""
-        return self._get_system_state('FreeAir') != 'disabled'
+        try:
+            return self._get_system_state('FreeAir') != 'disabled'
+        except KeyError:
+            return False
 
     @property
     def free_air(self) -> bool:
         """True if the free air system is turned on. False if unavailable or off
         """
-        return self._get_system_state('FreeAir') == 'on'
+        try:
+            return self._get_system_state('FreeAir') == 'on'
+        except KeyError:
+            return False
 
     async def set_free_air(self, value: bool) -> None:
         """Turn the free air system on or off.
