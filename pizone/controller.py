@@ -86,7 +86,7 @@ class Controller:
         self._initialised = False
         self._fail_exception = None
 
-        self._sending_lock = Lock()
+        self._controller_lock = Lock()
 
     async def _initialize(self) -> None:
         """Initialize the controller, does not complete until the system is
@@ -374,14 +374,14 @@ class Controller:
         if self._system_settings[state] == value:
             return
 
-        async with self._sending_lock:
+        async with self._controller_lock:
             await self._send_command_async(command, send)
 
-            # Need to refresh immediately after setting.
-            try:
-                await self._refresh_system()
-            except ConnectionError:
-                pass
+        # Need to refresh immediately after setting.
+        try:
+            await self._refresh_system()
+        except ConnectionError:
+            pass
 
     def _ensure_connected(self) -> None:
         if self._fail_exception:
@@ -420,10 +420,11 @@ class Controller:
     async def _get_resource(self, resource: str):
         try:
             session = self._discovery.session
-            async with session.get(
-                    'http://%s/%s' % (self.device_ip, resource),
-                    timeout=Controller.REQUEST_TIMEOUT) as response:
-                return await response.json(content_type=None)
+            async with self._controller_lock:
+                async with session.get(
+                        'http://%s/%s' % (self.device_ip, resource),
+                        timeout=Controller.REQUEST_TIMEOUT) as response:
+                    return await response.json(content_type=None)
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") \
