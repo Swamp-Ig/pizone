@@ -107,15 +107,14 @@ class Zone:
         if self._zone_data['MinAir'] == value:
             return
 
-        async with self._controller._sending_lock:
-            await self._send_command('AirMinCommand', value)
+        await self._send_command('AirMinCommand', value)
 
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        # need to refresh immediatley after updating
+        try:
+            await self._controller._refresh_zone_group(
+                self._index - self._index % 4)
+        except ConnectionError:
+            pass
 
     async def set_airflow_max(self, value: int) -> None:
         """
@@ -136,15 +135,14 @@ class Zone:
         if self._zone_data['MaxAir'] == value:
             return
 
-        async with self._controller._sending_lock:
-            await self._send_command('AirMaxCommand', value)
+        await self._send_command('AirMaxCommand', value)
 
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        # need to refresh immediatley after updating
+        try:
+            await self._controller._refresh_zone_group(
+                self._index - self._index % 4)
+        except ConnectionError:
+            pass
 
     async def set_temp_setpoint(self, value: float) -> None:
         """
@@ -170,20 +168,19 @@ class Zone:
         if self._zone_data['SetPoint'] == value:
             return
 
-        async with self._controller._sending_lock:
-            if self.mode != Zone.Mode.AUTO:
-                await self._send_command(
-                    'ZoneCommand',
-                    self._get_zone_state('SetPoint'))
-            # This needs to be sent twice to work
-            await self._send_command('ZoneCommand', value)
+        if self.mode != Zone.Mode.AUTO:
+            await self._send_command(
+                'ZoneCommand',
+                self._get_zone_state('SetPoint'))
+        # This needs to be sent twice to work
+        await self._send_command('ZoneCommand', value)
 
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        # need to refresh immediatley after updating
+        try:
+            await self._controller._refresh_zone_group(
+                self._index - self._index % 4)
+        except ConnectionError:
+            pass
 
     async def set_mode(self, value: Mode) -> None:
         """Set the current zone mode.
@@ -192,23 +189,22 @@ class Zone:
         'close' – the zone is currently closed
         'auto' – the zone is currently in temperature control mode
         """
-        async with self._controller._sending_lock:
-            if value == Zone.Mode.AUTO:
-                if self.type != Zone.Type.AUTO:
-                    raise AttributeError(
-                        'Can\'t use auto mode on open/close zone.')
-                await self._send_command(
-                    'ZoneCommand',
-                    self._get_zone_state('SetPoint'))
-            else:
-                await self._send_command('ZoneCommand', value.value)
+        if value == Zone.Mode.AUTO:
+            if self.type != Zone.Type.AUTO:
+                raise AttributeError(
+                    'Can\'t use auto mode on open/close zone.')
+            await self._send_command(
+                'ZoneCommand',
+                self._get_zone_state('SetPoint'))
+        else:
+            await self._send_command('ZoneCommand', value.value)
 
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        # need to refresh immediatley after updating
+        try:
+            await self._controller._refresh_zone_group(
+                self._index - self._index % 4)
+        except ConnectionError:
+            pass
 
     def _update_zone(self, zone_data, notify: bool = True):
         if zone_data['Index'] != self._index:
@@ -226,4 +222,5 @@ class Zone:
 
     async def _send_command(self, command, data: Union[str, float, int]):
         send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
-        await self._controller._send_command_async(command, send_data)
+        async with self._controller._controller_lock:
+            await self._controller._send_command_async(command, send_data)
