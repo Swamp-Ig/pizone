@@ -154,7 +154,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 
         self._transport = None  # type: Optional[DatagramTransport]
 
-        self._scan_condition = Condition(loop=self.loop)  # type: Condition
+        self._scan_condition = Condition()  # type: Condition
 
         self._tasks = []  # type: List[Future]
 
@@ -257,12 +257,12 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self.create_task(self._scan_loop())
 
     def _get_broadcasts(self):
-        for ifAddr in map(netifaces.ifaddresses, netifaces.interfaces()):
-            inetAddrs = ifAddr.get(netifaces.AF_INET)
-            if not inetAddrs:
+        for ifaddr in map(netifaces.ifaddresses, netifaces.interfaces()):
+            inetaddrs = ifaddr.get(netifaces.AF_INET)
+            if not inetaddrs:
                 continue
-            for inetAddr in inetAddrs:
-                broadcast = inetAddr.get('broadcast')
+            for inetaddr in inetaddrs:
+                broadcast = inetaddr.get('broadcast')
                 if broadcast:
                     yield broadcast
 
@@ -306,10 +306,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             await self._close_task
             return
         _LOG.info("Close called on discovery service.")
-        if 'current_task' in asyncio.__dict__.keys():
-            self._close_task = asyncio.current_task(loop=self.loop)
-        else:
-            self._close_task = Task.current_task(loop=self.loop)
+        self._close_task = current_task(loop=self.loop)
         if self._transport:
             self._transport.close()
 
@@ -365,14 +362,14 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             ctrl = self._find_by_addr(addr)
             if not ctrl:
                 return
-            self.create_task(self._wrap_update(ctrl._refresh_system()))  # pylint: disable=protected-access  # noqa: E501
+            return self.create_task(self._wrap_update(ctrl._refresh_system()))  # pylint: disable=protected-access  # noqa: E501
         elif data == CHANGED_ZONES:
             ctrl = self._find_by_addr(addr)
             if not ctrl:
                 return
-            self.create_task(self._wrap_update(ctrl._refresh_zones()))  # pylint: disable=protected-access  # noqa: E501
+            return self.create_task(self._wrap_update(ctrl._refresh_zones()))  # pylint: disable=protected-access  # noqa: E501
         else:
-            self._discovery_recieved(data)
+            return self._discovery_recieved(data)
 
     def _discovery_recieved(self, data):
         message = data.decode().split(',')
@@ -404,7 +401,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
                 self._controllers[device_uid] = controller
                 self.controller_discovered(controller)
 
-            self.create_task(initialize_controller())
+            return self.create_task(initialize_controller())
         else:
             controller = self._controllers[device_uid]
             controller._refresh_address(device_ip)  # pylint: disable=protected-access  # noqa: E501

@@ -15,14 +15,14 @@ setup(
     long_description_content_type="text/markdown",
     keywords=['iZone', 'IoT', ],
     url="https://github.com/Swamp-Ig/pizone",
-    python_requires='~=3.5',
+    python_requires='~=3.8',
     install_requires=['aiohttp>=3.4', 'netifaces'],
-    tests_require=['aiounittest'],
+    tests_require=['pytest-aio'],
     packages=find_packages(exclude=['tests', 'tests.*']),
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
-        "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.8",
         "License :: OSI Approved :: "
             "GNU General Public License v3 or later (GPLv3+)",
         "Operating System :: OS Independent",

@@ -1,30 +1,41 @@
 """Test for controller"""
 
 from asyncio import Event
-from pizone import Controller, Listener, Zone, discovery
 from pytest import raises, mark
+
+from pizone import Controller, Listener, Zone, discovery
 
 
 def dump_data(ctrl):
     """Testing"""
     print(ctrl.device_ip)
     print(ctrl.device_uid)
-    print("supply={0} mode={1} isOn={2}".format(
-        ctrl.temp_supply, ctrl.mode, ctrl.is_on))
+    print(
+        "supply={0} mode={1} isOn={2}".format(
+            ctrl.temp_supply, ctrl.mode, ctrl.is_on)
+    )
     print("sleep_timer={0}".format(ctrl.sleep_timer))
 
     for zone in ctrl.zones:
         zone_target = (
             zone.temp_setpoint
             if zone.mode == Zone.Mode.AUTO
-            else zone.mode.value)
-        print("Name {0} type:{1} temp:{2} target:{3} airflow_min:{4} airflow_max:{5}".format(
-            zone.name, zone.type.value, zone.temp_current, zone_target, zone.airflow_min, zone.airflow_max))
+            else zone.mode.value
+        )
+        print(
+            "Name {0} type:{1} temp:{2} target:{3} airflow_min:{4} airflow_max:{5}".format(
+                zone.name,
+                zone.type.value,
+                zone.temp_current,
+                zone_target,
+                zone.airflow_min,
+                zone.airflow_max,
+            )
+        )
 
 
 # Disabled because this will only work at my house
-@mark.skip
-async def test_full_stack(loop):
+async def test_full_stack():
     controllers = []
     event = Event()
 
@@ -35,6 +46,7 @@ async def test_full_stack(loop):
 
         def controller_reconnected(self, ctrl):
             event.set()
+
     listener = TestListener()
 
     async with discovery(listener):
@@ -46,35 +58,50 @@ async def test_full_stack(loop):
         dump_data(ctrl)
 
         # test setting values
-        await ctrl.set_mode(Controller.Mode.AUTO)
+        old_mode = ctrl.mode
+        try:
+            await ctrl.set_mode(Controller.Mode.AUTO)
+        finally:
+            await ctrl.set_mode(old_mode)
 
-        # test set airflow min
-        await ctrl.zones[1].set_airflow_min(40)
+        old_airflow_min = ctrl.zones[1].airflow_min
+        old_airflow_max = ctrl.zones[1].airflow_max
 
-        with raises(AttributeError):
-          await ctrl.zones[1].set_airflow_min(41)
+        try:
+            # test set airflow min
+            await ctrl.zones[1].set_airflow_min(40)
 
-        with raises(AttributeError):
-          await ctrl.zones[1].set_airflow_min(-1)
+            with raises(AttributeError):
+                await ctrl.zones[1].set_airflow_min(41)
 
-        with raises(AttributeError):
-          await ctrl.zones[1].set_airflow_min(105)
+            with raises(AttributeError):
+                await ctrl.zones[1].set_airflow_min(-1)
 
-        # test set airflow max
-        await ctrl.zones[1].set_airflow_max(90)
+            with raises(AttributeError):
+                await ctrl.zones[1].set_airflow_min(105)
 
-        with raises(AttributeError):
-          await ctrl.zones[1].set_airflow_max(41)
+            assert ctrl.zones[1].airflow_min == 40
 
-        with raises(AttributeError):
-          await ctrl.zones[1].set_airflow_max(-1)
+            # test set airflow max
+            await ctrl.zones[1].set_airflow_max(90)
 
-        with raises(AttributeError):
-          await ctrl.zones[1].set_airflow_max(105)
+            with raises(AttributeError):
+                await ctrl.zones[1].set_airflow_max(41)
+
+            with raises(AttributeError):
+                await ctrl.zones[1].set_airflow_max(-1)
+
+            with raises(AttributeError):
+                await ctrl.zones[1].set_airflow_max(105)
+
+            assert ctrl.zones[1].airflow_max == 90
+        finally:
+            await ctrl.zones[1].set_airflow_min(old_airflow_min)
+            await ctrl.zones[1].set_airflow_max(old_airflow_max)
 
         Controller.CONNECT_RETRY_TIMEOUT = 2
 
-        ctrl._ip = 'bababa'  # pylint: disable=protected-access
+        ctrl._ip = "bababa"  # pylint: disable=protected-access
         with raises(ConnectionError):
             await ctrl.set_sleep_timer(30)
 

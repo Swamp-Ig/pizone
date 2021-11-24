@@ -1,12 +1,11 @@
 
 from asyncio import sleep
 
-from asynctest.mock import patch
+from pytest import raises, mark
+from unittest.mock import patch
 
 from pizone import discovery, Controller, Listener
 from pizone.discovery import DiscoveryService
-
-from pytest import raises
 
 
 @patch.object(DiscoveryService, '_get_broadcasts')
@@ -36,10 +35,14 @@ async def test_rescan(send):
     assert service.is_closed
 
 
-async def test_fail_on_connect(loop, caplog):
+async def test_fail_on_connect(event_loop, caplog):
     from .conftest import MockDiscoveryService
 
-    service = MockDiscoveryService(loop)
+    async def start_discovery_noop():
+        pass
+
+    service = MockDiscoveryService(event_loop)
+    service._start_discovery = start_discovery_noop 
     service.connected = False
 
     async with service:
@@ -64,7 +67,6 @@ async def test_connection_lost(service, caplog):
 
     assert service.is_closed
 
-
 async def test_discovery(service):
     assert len(service.controllers) == 1
     assert '000000001' in service.controllers
@@ -86,7 +88,7 @@ async def test_discovery(service):
 
 async def test_legacy_discovery(legacy_service):
     service = legacy_service
-    
+
     assert len(service.controllers) == 1
     assert '000000001' in service.controllers
 
