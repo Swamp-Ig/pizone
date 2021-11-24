@@ -133,6 +133,7 @@ class Controller:
 
     @property
     def discovery(self):
+        """The discovery service"""
         return self._discovery
 
     @property
@@ -436,6 +437,7 @@ class Controller:
         loop = self.discovery.loop
         on_complete = loop.create_future()
         device_ip = self.device_ip
+        response = []
 
         class _PostProtocol(asyncio.Protocol):
             def connection_made(self, transport):
@@ -451,13 +453,15 @@ class Controller:
                 self.transport = transport
 
             def data_received(self, data):
+                response.append(data.decode())
+
+            def eof_received(self):
                 self.transport.close()
-                response = data.decode()  # type: str
-                lines = response.split('\r\n', 1)
+                lines = ''.join(response).split('\r\n')
                 if not lines:
                     return
                 parts = lines[0].split(' ')
-                if(len(parts) != 3):
+                if len(parts) != 3:
                     return
                 if int(parts[1]) != 200:
                     on_complete.set_exception(
@@ -465,11 +469,13 @@ class Controller:
                             None, None,
                             status=int(parts[1]),
                             message=parts[2]))
+                elif len(lines) > 2 and len(lines[-2]) == 0:
+                    on_complete.set_result(lines[-1])
                 else:
-                    on_complete.set_result(True)
+                    on_complete.set_result(None)
 
         try:
-            async with timeout(Controller.REQUEST_TIMEOUT) as cm:
+            async with timeout(Controller.REQUEST_TIMEOUT) as timer:
                 transport, _ = await loop.create_connection(  # type: ignore
                     lambda: _PostProtocol(),
                     self.device_ip, 80)  # mypy: ignore
@@ -477,12 +483,12 @@ class Controller:
                 # wait for response to be recieved.
                 await on_complete
 
-            if cm.expired:
+            if timer.expired:
                 if transport:
                     transport.close()
                 raise asyncio.TimeoutError()
 
-            on_complete.result()
+            return on_complete.result()
 
         except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
