@@ -425,7 +425,7 @@ class Controller:
     async def _get_resource(self, resource: str):
         try:
             session = self._discovery.session
-            async with session.get(
+            async with self._sending_lock, session.get(
                     'http://%s/%s' % (self.device_ip, resource),
                     timeout=Controller.REQUEST_TIMEOUT) as response:
                 return await response.json(content_type=None)
@@ -479,24 +479,23 @@ class Controller:
                     on_complete.set_result(None)
 
         # The server doesn't tolerate multiple requests in fly concurrently
-        async with self._sending_lock:
-            try:
-                async with timeout(Controller.REQUEST_TIMEOUT) as timer:
-                    transport, _ = await loop.create_connection(  # type: ignore  # noqa: E501
-                        lambda: _PostProtocol(),  # pylint: disable=unnecessary-lambda  # noqa: E501
-                        self.device_ip, 80)  # mypy: ignore
+        try:
+            async with self._sending_lock, timeout(Controller.REQUEST_TIMEOUT) as timer:
+                transport, _ = await loop.create_connection(  # type: ignore  # noqa: E501
+                    lambda: _PostProtocol(),  # pylint: disable=unnecessary-lambda  # noqa: E501
+                    self.device_ip, 80)  # mypy: ignore
 
-                    # wait for response to be recieved.
-                    await on_complete
+                # wait for response to be recieved.
+                await on_complete
 
-                if timer.expired:
-                    if transport:
-                        transport.close()
-                    raise asyncio.TimeoutError()
+            if timer.expired:
+                if transport:
+                    transport.close()
+                raise asyncio.TimeoutError()
 
-                return on_complete.result()
+            return on_complete.result()
 
-            except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
-                self._failed_connection(ex)
-                raise ConnectionError(
-                    "Unable to connect to controller") from ex
+        except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
+            self._failed_connection(ex)
+            raise ConnectionError(
+                "Unable to connect to controller") from ex
