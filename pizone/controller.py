@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from asyncio import Lock
+from asyncio import Lock, Condition
 from enum import Enum
 from typing import Any, Dict, List, Union, Optional
 
@@ -13,8 +13,6 @@ from async_timeout import timeout
 from .zone import Zone
 
 _LOG = logging.getLogger("pizone.controller")
-
-REFRESH_INTERVAL = 25.0
 
 
 class Controller:
@@ -44,6 +42,12 @@ class Controller:
 
     CONNECT_RETRY_TIMEOUT = 20
     """Cool-down period for retrying to connect to the controller"""
+
+    REFRESH_INTERVAL = 25.0
+    """Interval between refreshes of data."""
+
+    UPDATE_REFRESH_DELAY = 5.0
+    """Delay after updating data before a refresh."""
 
     _VALID_FAN_MODES = {
         'disabled': [Fan.LOW, Fan.MED, Fan.HIGH],
@@ -87,6 +91,7 @@ class Controller:
         self._fail_exception = None
 
         self._sending_lock = Lock()
+        self._scan_condition = Condition()
 
     async def _initialize(self) -> None:
         """Initialize the controller, does not complete until the system is
@@ -100,12 +105,18 @@ class Controller:
         self.zones = [Zone(self, i) for i in range(zone_count)]
         await self._refresh_zones(notify=False)
         self._initialised = True
-        if self._is_v2:
-            self.discovery.loop.create_task(self._poll_loop())
+        self._discovery.create_task(self._poll_loop())
 
     async def _poll_loop(self) -> None:
         while True:
-            await asyncio.sleep(REFRESH_INTERVAL)
+            try:
+                async with timeout(Controller.REFRESH_INTERVAL):
+                    async with self._scan_condition:
+                        await self._scan_condition.wait()
+                # triggered rescan, short delay
+                await asyncio.sleep(Controller.UPDATE_REFRESH_DELAY)
+            except asyncio.TimeoutError:
+                pass
 
             if self._discovery.is_closed:
                 return
@@ -115,6 +126,10 @@ class Controller:
                 _LOG.debug("Polling unit %s.", self._device_uid)
             except ConnectionError as ex:
                 _LOG.debug("Poll failed due to exeption %s.", repr(ex))
+
+    async def _rescan(self) -> None:
+        async with self._scan_condition:
+            self._scan_condition.notify()
 
     @property
     def device_ip(self) -> str:
@@ -154,9 +169,7 @@ class Controller:
         return self.Mode(self._get_system_state('SysMode'))
 
     async def set_mode(self, value: Mode):
-        """Set system mode, cooling, heating, etc
-        Async method, await to ensure command revieved by system.
-        """
+        """Set system mode, cooling, heating, etc."""
         if value == Controller.Mode.FREE_AIR:
             if self.free_air:
                 return
@@ -166,7 +179,6 @@ class Controller:
         else:
             if self.free_air:
                 await self._set_system_state('FreeAir', 'FreeAir', 'off')
-                await asyncio.sleep(0.5)
             await self._set_system_state('SysMode', 'SystemMODE', value.value)
 
     @property
@@ -176,7 +188,6 @@ class Controller:
 
     async def set_fan(self, value: Fan) -> None:
         """The fan level. Not all fan modes are allowed depending on the system.
-        Async method, await to ensure command revieved by system.
         Raises:
             AttributeError: On setting if the argument value is not valid
         """
@@ -194,7 +205,6 @@ class Controller:
     async def set_sleep_timer(self, value: int):
         """The sleep timer.
         Valid settings are 0, 30, 60, 90, 120
-        Async method, await to ensure command revieved by system.
         Raises:
             AttributeError: On setting if the argument value is not valid
         """
@@ -218,7 +228,6 @@ class Controller:
 
     async def set_free_air(self, value: bool) -> None:
         """Turn the free air system on or off.
-        Async method, await to ensure command revieved by system.
         Raises:
             AttributeError: If attempting to set the state of the free air
                 system when it is not enabled.
@@ -333,7 +342,7 @@ class Controller:
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
-        values = await self._get_resource('SystemSettings')  # type: Controller.ControllerData  # noqa: E501
+        values = await self._get_resource('SystemSettings')  # type: Controller.ControllerData  # noqa
         if self._device_uid != values['AirStreamDeviceUId']:
             _LOG.error("_refresh_system called with unmatching device ID")
             return
@@ -372,17 +381,12 @@ class Controller:
     async def _set_system_state(self, state, command, value, send=None):
         if send is None:
             send = value
-        if self._system_settings[state] == value:
-            return
+        await self._send_command_async(command, send)
 
-        async with self._sending_lock:
-            await self._send_command_async(command, send)
-
-            # Need to refresh immediately after setting.
-            try:
-                await self._refresh_system()
-            except ConnectionError:
-                pass
+        # Update state and trigger rescan
+        self._system_settings[state] = value
+        self._discovery.controller_update(self)
+        await self._rescan()
 
     def _ensure_connected(self) -> None:
         if self._fail_exception:
@@ -450,7 +454,7 @@ class Controller:
                 _LOG.debug(
                     "Writing message to " + device_ip + body.decode())
                 transport.write(header + body)
-                self.transport = transport
+                self.transport = transport  # pylint: disable=attribute-defined-outside-init  # noqa: E501
 
             def data_received(self, data):
                 response.append(data.decode())
@@ -474,22 +478,25 @@ class Controller:
                 else:
                     on_complete.set_result(None)
 
-        try:
-            async with timeout(Controller.REQUEST_TIMEOUT) as timer:
-                transport, _ = await loop.create_connection(  # type: ignore
-                    lambda: _PostProtocol(),
-                    self.device_ip, 80)  # mypy: ignore
+        # The server doesn't tolerate multiple requests in fly concurrently
+        async with self._sending_lock:
+            try:
+                async with timeout(Controller.REQUEST_TIMEOUT) as timer:
+                    transport, _ = await loop.create_connection(  # type: ignore  # noqa: E501
+                        lambda: _PostProtocol(),  # pylint: disable=unnecessary-lambda  # noqa: E501
+                        self.device_ip, 80)  # mypy: ignore
 
-                # wait for response to be recieved.
-                await on_complete
+                    # wait for response to be recieved.
+                    await on_complete
 
-            if timer.expired:
-                if transport:
-                    transport.close()
-                raise asyncio.TimeoutError()
+                if timer.expired:
+                    if transport:
+                        transport.close()
+                    raise asyncio.TimeoutError()
 
-            return on_complete.result()
+                return on_complete.result()
 
-        except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
-            self._failed_connection(ex)
-            raise ConnectionError("Unable to connect to controller") from ex
+            except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
+                self._failed_connection(ex)
+                raise ConnectionError(
+                    "Unable to connect to controller") from ex

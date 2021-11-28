@@ -1,9 +1,23 @@
 """Test for controller"""
 
-from asyncio import Event
-from pytest import raises, mark
+from asyncio import Event, sleep
+from pytest import raises
 
 from pizone import Controller, Listener, Zone, discovery
+
+
+class ListenerTesting(Listener):
+
+    def __init__(self) -> None:
+        self.controllers = []
+        self.event = Event()
+
+    def controller_discovered(self, _ctrl):
+        self.controllers.append(_ctrl)
+        self.event.set()
+
+    def controller_reconnected(self, ctrl):
+        self.event.set()
 
 
 def dump_data(ctrl):
@@ -34,42 +48,37 @@ def dump_data(ctrl):
         )
 
 
-# Disabled because this will only work at my house
 async def test_full_stack():
-    controllers = []
-    event = Event()
-
-    class TestListener(Listener):
-        def controller_discovered(self, _ctrl):
-            controllers.append(_ctrl)
-            event.set()
-
-        def controller_reconnected(self, ctrl):
-            event.set()
-
-    listener = TestListener()
+    listener = ListenerTesting()
 
     async with discovery(listener):
-        await event.wait()
-        event.clear()
+        await listener.event.wait()
+        listener.event.clear()
 
-        ctrl = controllers[0]
+        if len(listener.controllers) < 1:
+            return
+
+        ctrl = listener.controllers[0]
 
         dump_data(ctrl)
 
-        # test setting values
         old_mode = ctrl.mode
-        try:
-            await ctrl.set_mode(Controller.Mode.AUTO)
-        finally:
-            await ctrl.set_mode(old_mode)
-
         old_airflow_min = ctrl.zones[1].airflow_min
         old_airflow_max = ctrl.zones[1].airflow_max
 
         try:
+            # test setting values
+            mode = (
+                Controller.Mode.COOL
+                if old_mode == Controller.Mode.AUTO
+                else Controller.Mode.AUTO
+            )
+            await ctrl.set_mode(mode)
+            assert ctrl.mode == mode
+
             # test set airflow min
-            await ctrl.zones[1].set_airflow_min(40)
+            nmin = 20 if old_airflow_min == 10 else 10
+            await ctrl.zones[1].set_airflow_min(nmin)
 
             with raises(AttributeError):
                 await ctrl.zones[1].set_airflow_min(41)
@@ -80,10 +89,11 @@ async def test_full_stack():
             with raises(AttributeError):
                 await ctrl.zones[1].set_airflow_min(105)
 
-            assert ctrl.zones[1].airflow_min == 40
+            assert ctrl.zones[1].airflow_min == nmin
 
             # test set airflow max
-            await ctrl.zones[1].set_airflow_max(90)
+            nmax = 80 if old_airflow_max == 90 else 90
+            await ctrl.zones[1].set_airflow_max(nmax)
 
             with raises(AttributeError):
                 await ctrl.zones[1].set_airflow_max(41)
@@ -94,21 +104,49 @@ async def test_full_stack():
             with raises(AttributeError):
                 await ctrl.zones[1].set_airflow_max(105)
 
-            assert ctrl.zones[1].airflow_max == 90
+            assert ctrl.zones[1].airflow_max == nmax
+
+            await sleep(10)
+
+            assert ctrl.mode == mode
+            assert ctrl.zones[1].airflow_min == nmin
+            assert ctrl.zones[1].airflow_max == nmax
+
+            # test automatic reconnection
+            Controller.CONNECT_RETRY_TIMEOUT = 2
+
+            ctrl._ip = "bababa"  # pylint: disable=protected-access
+            with raises(ConnectionError):
+                await ctrl.set_sleep_timer(30)
+
+            # Should reconnect here
+            await listener.event.wait()
+            listener.event.clear()
+
+            await ctrl.set_mode(Controller.Mode.HEAT)
+
         finally:
+            # Tidy everything up
+            await ctrl.set_mode(old_mode)
             await ctrl.zones[1].set_airflow_min(old_airflow_min)
             await ctrl.zones[1].set_airflow_max(old_airflow_max)
 
-        Controller.CONNECT_RETRY_TIMEOUT = 2
+        dump_data(ctrl)
 
-        ctrl._ip = "bababa"  # pylint: disable=protected-access
-        with raises(ConnectionError):
-            await ctrl.set_sleep_timer(30)
 
-        # Should reconnect here
-        await event.wait()
-        event.clear()
+async def test_power():
 
-        await ctrl.set_mode(Controller.Mode.HEAT)
+    listener = ListenerTesting()
+
+    async with discovery(listener):
+        await listener.event.wait()
+        listener.event.clear()
+
+        ctrl = listener.controllers[0]
+
+        command = "PowerRequest"
+        data = {"Type": 2, "No": 0, "No1": 0}
+
+        result = await ctrl._send_command_async(command, data)
 
         dump_data(ctrl)

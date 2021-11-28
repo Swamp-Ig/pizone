@@ -1,16 +1,15 @@
 """iZone device discovery."""
 
 import asyncio
-from async_timeout import timeout
 import logging
 from abc import abstractmethod, ABC
 from asyncio import (AbstractEventLoop, Condition, DatagramProtocol,
-                     DatagramTransport, Future, Task, )
+                     DatagramTransport, Future, Task, CancelledError, )
 from logging import Logger
 from typing import Dict, List, Set, Optional
 
+from async_timeout import timeout
 from aiohttp import ClientSession
-
 import netifaces
 
 from .controller import Controller
@@ -167,8 +166,11 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         await self.close()
 
     def _task_done_callback(self, task):
-        if task.exception():
-            _LOG.exception("Uncaught exception", exc_info=task.exception())
+        try:
+            if task.exception():
+                _LOG.exception("Uncaught exception", exc_info=task.exception())
+        except CancelledError:
+            pass
         self._tasks.remove(task)
 
     # managing the task list.
@@ -209,7 +211,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             "Connection to controller lost: id=%s ip=%s",
             ctrl.device_uid, ctrl.device_ip)
         self._disconnected.add(ctrl.device_uid)
-        self.loop.create_task(self._rescan())
+        self.create_task(self._rescan())
         for listener in self._listeners:
             with LogExceptions("controller_disconnected"):
                 listener.controller_disconnected(ctrl, ex)
@@ -310,7 +312,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         if self._transport:
             self._transport.close()
 
-        await self._rescan()
+        for i in self._tasks:
+            i.cancel()
 
         if self._own_session and self.session:
             await self.session.close()

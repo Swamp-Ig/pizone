@@ -1,14 +1,13 @@
-from asyncio import sleep, AbstractEventLoop, wait
+from asyncio import AbstractEventLoop
 from typing import Any, Dict, List, Tuple
 from copy import deepcopy
 
 from unittest.mock import AsyncMock
+from pytest import fixture
 from aiohttp import ClientSession
 
 from pizone import Controller
 from pizone.discovery import DiscoveryService, CHANGED_SYSTEM, CHANGED_ZONES
-
-from pytest import fixture
 
 
 class MockController(Controller):
@@ -80,6 +79,7 @@ def service(event_loop):
     yield service
 
     event_loop.run_until_complete(service.close())
+
 
 @fixture
 def legacy_service(event_loop):

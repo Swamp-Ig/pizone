@@ -1,7 +1,7 @@
 
 from asyncio import sleep
 
-from pytest import raises, mark
+from pytest import raises
 from unittest.mock import patch
 
 from pizone import discovery, Controller, Listener
@@ -42,7 +42,7 @@ async def test_fail_on_connect(event_loop, caplog):
         pass
 
     service = MockDiscoveryService(event_loop)
-    service._start_discovery = start_discovery_noop 
+    service._start_discovery = start_discovery_noop
     service.connected = False
 
     async with service:
@@ -67,6 +67,7 @@ async def test_connection_lost(service, caplog):
 
     assert service.is_closed
 
+
 async def test_discovery(service):
     assert len(service.controllers) == 1
     assert '000000001' in service.controllers
@@ -76,13 +77,8 @@ async def test_discovery(service):
     assert controller.device_ip == '8.8.8.8'
     assert controller.mode == Controller.Mode.HEAT
 
-    # Not updated yet
     await controller.set_mode(Controller.Mode.COOL)
     assert controller.sent[0] == ('SystemMODE', 'cool')
-    assert controller.mode == Controller.Mode.HEAT
-
-    # Now updated
-    await controller.change_system_state('SysMode', 'cool')
     assert controller.mode == Controller.Mode.COOL
 
 
@@ -97,13 +93,8 @@ async def test_legacy_discovery(legacy_service):
     assert controller.device_ip == '8.8.8.8'
     assert controller.mode == Controller.Mode.HEAT
 
-    # Not updated yet
     await controller.set_mode(Controller.Mode.COOL)
     assert controller.sent[0] == ('SystemMODE', 'cool')
-    assert controller.mode == Controller.Mode.HEAT
-
-    # Now updated
-    await controller.change_system_state('SysMode', 'cool')
     assert controller.mode == Controller.Mode.COOL
 
 

@@ -91,7 +91,6 @@ class Zone:
     async def set_airflow_min(self, value: int) -> None:
         """
         Change the zone airflow min in 5% increments
-        Async method, returns when server has changed mode.
         Valid values are percent in 5% increments.
         Raises:
             AttributeError if the set point is out of range
@@ -104,23 +103,14 @@ class Zone:
                 or value > 100):
             raise AttributeError(
                 'MinAir \'{}\' is out of range'.format(value))
-        if self._zone_data['MinAir'] == value:
-            return
 
-        async with self._controller._sending_lock:
-            await self._send_command('AirMinCommand', value)
-
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        await self._send_command('AirMinCommand', value)
+        self._zone_data['MinAir'] = value
+        self._fire_listeners()
 
     async def set_airflow_max(self, value: int) -> None:
         """
         Change the zone airflow max in 5% increments
-        Async method, returns when server has changed mode.
         Valid values are percent in 5% increments.
         Raises:
             AttributeError if the set point is out of range
@@ -133,23 +123,14 @@ class Zone:
                 or value > 100):
             raise AttributeError(
                 'MaxAir \'{}\' is out of range'.format(value))
-        if self._zone_data['MaxAir'] == value:
-            return
 
-        async with self._controller._sending_lock:
-            await self._send_command('AirMaxCommand', value)
-
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        await self._send_command('AirMaxCommand', value)
+        self._zone_data['MaxAir'] = value
+        self._fire_listeners()
 
     async def set_temp_setpoint(self, value: float) -> None:
         """
         Change the setpoint for the zone in degrees C.
-        Async method, returns when server has changed mode.
         Valid values are between the min and max temp on the controller,
         and in half-degree increments
         Raises:
@@ -167,23 +148,11 @@ class Zone:
                 or value > self._controller.temp_max):
             raise AttributeError(
                 'SetPoint \'{}\' is out of range'.format(value))
-        if self._zone_data['SetPoint'] == value:
-            return
 
-        async with self._controller._sending_lock:
-            if self.mode != Zone.Mode.AUTO:
-                await self._send_command(
-                    'ZoneCommand',
-                    self._get_zone_state('SetPoint'))
-            # This needs to be sent twice to work
-            await self._send_command('ZoneCommand', value)
-
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        await self._send_command('ZoneCommand', value)
+        self._zone_data['Mode'] = 'auto'
+        self._zone_data['SetPoint'] = value
+        self._fire_listeners()
 
     async def set_mode(self, value: Mode) -> None:
         """Set the current zone mode.
@@ -192,23 +161,18 @@ class Zone:
         'close' – the zone is currently closed
         'auto' – the zone is currently in temperature control mode
         """
-        async with self._controller._sending_lock:
-            if value == Zone.Mode.AUTO:
-                if self.type != Zone.Type.AUTO:
-                    raise AttributeError(
-                        'Can\'t use auto mode on open/close zone.')
-                await self._send_command(
-                    'ZoneCommand',
-                    self._get_zone_state('SetPoint'))
-            else:
-                await self._send_command('ZoneCommand', value.value)
-
-            # need to refresh immediatley after updating
-            try:
-                await self._controller._refresh_zone_group(
-                    self._index - self._index % 4)
-            except ConnectionError:
-                pass
+        if value == Zone.Mode.AUTO:
+            if self.type != Zone.Type.AUTO:
+                raise AttributeError(
+                    'Can\'t use auto mode on open/close zone.')
+            await self._send_command(
+                'ZoneCommand',
+                self._get_zone_state('SetPoint'))
+            self._zone_data['Mode'] = 'auto'
+        else:
+            await self._send_command('ZoneCommand', value.value)
+            self._zone_data['Mode'] = value.value
+        self._fire_listeners()
 
     def _update_zone(self, zone_data, notify: bool = True):
         if zone_data['Index'] != self._index:
@@ -226,4 +190,4 @@ class Zone:
 
     async def _send_command(self, command, data: Union[str, float, int]):
         send_data = {'ZoneNo': str(self._index+1), 'Command': str(data)}
-        await self._controller._send_command_async(command, send_data)
+        await self._controller._send_command_async(command, send_data)  # pylint: disable=protected-access  # noqa: E501
