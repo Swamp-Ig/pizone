@@ -1,7 +1,7 @@
 """Test for controller"""
 
 from asyncio import Event, sleep
-from pytest import raises
+from pytest import raises, mark
 
 from pizone import Controller, Listener, Zone, discovery
 
@@ -133,7 +133,7 @@ async def test_full_stack():
 
         dump_data(ctrl)
 
-
+@mark.skip
 async def test_power():
 
     listener = ListenerTesting()
@@ -141,6 +141,9 @@ async def test_power():
     async with discovery(listener):
         await listener.event.wait()
         listener.event.clear()
+
+        if len(listener.controllers) < 1:
+            return
 
         ctrl = listener.controllers[0]
 
