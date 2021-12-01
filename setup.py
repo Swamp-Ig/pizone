@@ -7,7 +7,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="python-izone",
-    version="1.1.6",
+    version="1.1.7",
     author="Penny Wood",
     author_email="pypl@ninjateaparty.com",
     description="A python interface to the iZone airconditioner controller",
