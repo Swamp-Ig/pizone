@@ -11,28 +11,32 @@ import aiohttp
 from async_timeout import timeout
 
 from .zone import Zone
+from .power import Power
 
 _LOG = logging.getLogger("pizone.controller")
 
 
 class Controller:
     """Interface to IZone controller"""
+
     class Mode(Enum):
         """Valid controller modes"""
-        COOL = 'cool'
-        HEAT = 'heat'
-        VENT = 'vent'
-        DRY = 'dry'
-        AUTO = 'auto'
-        FREE_AIR = 'free_air'
+
+        COOL = "cool"
+        HEAT = "heat"
+        VENT = "vent"
+        DRY = "dry"
+        AUTO = "auto"
+        FREE_AIR = "free_air"
 
     class Fan(Enum):
         """All fan modes"""
-        LOW = 'low'
-        MED = 'med'
-        HIGH = 'high'
-        TOP = 'top'
-        AUTO = 'auto'
+
+        LOW = "low"
+        MED = "med"
+        HIGH = "high"
+        TOP = "top"
+        AUTO = "auto"
 
     DictValue = Union[str, int, float]
     ControllerData = Dict[str, DictValue]
@@ -50,15 +54,16 @@ class Controller:
     """Delay after updating data before a refresh."""
 
     _VALID_FAN_MODES = {
-        'disabled': [Fan.LOW, Fan.MED, Fan.HIGH],
-        'unknown': [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
-        '3-speed': [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
-        '2-speed': [Fan.LOW, Fan.HIGH, Fan.AUTO],
-        'var-speed': [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
-        }  # type: Dict[str, List[Fan]]
+        "disabled": [Fan.LOW, Fan.MED, Fan.HIGH],
+        "unknown": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
+        "3-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
+        "2-speed": [Fan.LOW, Fan.HIGH, Fan.AUTO],
+        "var-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
+    }  # type: Dict[str, List[Fan]]
 
-    def __init__(self, discovery, device_uid: str,
-                 device_ip: str, is_v2: bool) -> None:
+    def __init__(
+        self, discovery, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
+    ) -> None:
         """Create a controller interface.
 
         Usually this is called from the discovery service. If neither
@@ -82,10 +87,12 @@ class Controller:
         self._discovery = discovery
         self._device_uid = device_uid
         self._is_v2 = is_v2
+        self._is_ipower = is_ipower
 
         self.zones = []  # type: List[Zone]
         self.fan_modes = []  # type: List[Controller.Fan]
         self._system_settings = {}  # type: Controller.ControllerData
+        self._power = None  # type: Optional[Power]
 
         self._initialised = False
         self._fail_exception = None
@@ -99,11 +106,21 @@ class Controller:
         await self._refresh_system(notify=False)
 
         self.fan_modes = Controller._VALID_FAN_MODES[
-            str(self._system_settings.get('FanAuto', 'disabled'))]
+            str(self._system_settings.get("FanAuto", "disabled"))
+        ]
 
-        zone_count = int(self._system_settings['NoOfZones'])
+        zone_count = int(self._system_settings["NoOfZones"])
         self.zones = [Zone(self, i) for i in range(zone_count)]
         await self._refresh_zones(notify=False)
+
+        if self._is_ipower:
+            self._power = Power(self)
+            await self._power.init()
+            if self._power.enabled:
+                await self._refresh_power(notify=False)
+        else:
+            self._power = None
+
         self._initialised = True
         self._discovery.create_task(self._poll_loop())
 
@@ -121,15 +138,23 @@ class Controller:
             if self._discovery.is_closed:
                 return
 
+            # pylint: disable=broad-except
             try:
                 await self._refresh_all()
                 _LOG.debug("Polling unit %s.", self._device_uid)
             except ConnectionError as ex:
                 _LOG.debug("Poll failed due to exeption %s.", repr(ex))
+            except Exception:
+                _LOG.error("Unexpected exception", exc_info=True)
 
     async def _rescan(self) -> None:
         async with self._scan_condition:
             self._scan_condition.notify()
+
+    @property
+    def power(self) -> Optional[Power]:
+        """Power info"""
+        return self._power
 
     @property
     def device_ip(self) -> str:
@@ -138,12 +163,12 @@ class Controller:
 
     @property
     def device_uid(self) -> str:
-        '''UId of the unit'''
+        """UId of the unit"""
         return self._device_uid
 
     @property
     def is_v2(self) -> bool:
-        '''True if this is a v2 controller'''
+        """True if this is a v2 controller"""
         return self._is_v2
 
     @property
@@ -154,19 +179,18 @@ class Controller:
     @property
     def is_on(self) -> bool:
         """True if the system is turned on"""
-        return self._get_system_state('SysOn') == 'on'
+        return self._get_system_state("SysOn") == "on"
 
     async def set_on(self, value: bool) -> None:
         """Turn the system on or off."""
-        await self._set_system_state(
-            'SysOn', 'SystemON', 'on' if value else 'off')
+        await self._set_system_state("SysOn", "SystemON", "on" if value else "off")
 
     @property
-    def mode(self) -> 'Mode':
+    def mode(self) -> "Mode":
         """System mode, cooling, heating, etc"""
         if self.free_air:
             return self.Mode.FREE_AIR
-        return self.Mode(self._get_system_state('SysMode'))
+        return self.Mode(self._get_system_state("SysMode"))
 
     async def set_mode(self, value: Mode):
         """Set system mode, cooling, heating, etc."""
@@ -175,16 +199,16 @@ class Controller:
                 return
             if not self.free_air_enabled:
                 raise AttributeError("Free air system is not enabled")
-            await self._set_system_state('FreeAir', 'FreeAir', 'on')
+            await self._set_system_state("FreeAir", "FreeAir", "on")
         else:
             if self.free_air:
-                await self._set_system_state('FreeAir', 'FreeAir', 'off')
-            await self._set_system_state('SysMode', 'SystemMODE', value.value)
+                await self._set_system_state("FreeAir", "FreeAir", "off")
+            await self._set_system_state("SysMode", "SystemMODE", value.value)
 
     @property
-    def fan(self) -> 'Fan':
+    def fan(self) -> "Fan":
         """The current fan level."""
-        return self.Fan(self._get_system_state('SysFan'))
+        return self.Fan(self._get_system_state("SysFan"))
 
     async def set_fan(self, value: Fan) -> None:
         """The fan level. Not all fan modes are allowed depending on the system.
@@ -194,13 +218,16 @@ class Controller:
         if value not in self.fan_modes:
             raise AttributeError("Fan mode {} not allowed".format(value.value))
         await self._set_system_state(
-            'SysFan', 'SystemFAN', value.value,
-            'medium' if value is Controller.Fan.MED else value.value)
+            "SysFan",
+            "SystemFAN",
+            value.value,
+            "medium" if value is Controller.Fan.MED else value.value,
+        )
 
     @property
     def sleep_timer(self) -> int:
         """Current setting for the sleep timer."""
-        return int(self._get_system_state('SleepTimer'))
+        return int(self._get_system_state("SleepTimer"))
 
     async def set_sleep_timer(self, value: int):
         """The sleep timer.
@@ -211,20 +238,19 @@ class Controller:
         time = int(value)
         if time < 0 or time > 120 or time % 30 != 0:
             raise AttributeError(
-                'Invalid Sleep Timer \"{}\", must be divisible by 30'
-                .format(value))
-        await self._set_system_state('SleepTimer', 'SleepTimer', value, time)
+                'Invalid Sleep Timer "{}", must be divisible by 30'.format(value)
+            )
+        await self._set_system_state("SleepTimer", "SleepTimer", value, time)
 
     @property
     def free_air_enabled(self) -> bool:
         """Test if the system has free air system available"""
-        return self._get_system_state('FreeAir') != 'disabled'
+        return self._get_system_state("FreeAir") != "disabled"
 
     @property
     def free_air(self) -> bool:
-        """True if the free air system is turned on. False if unavailable or off
-        """
-        return self._get_system_state('FreeAir') == 'on'
+        """True if the free air system is turned on. False if unavailable or off"""
+        return self._get_system_state("FreeAir") == "on"
 
     async def set_free_air(self, value: bool) -> None:
         """Turn the free air system on or off.
@@ -233,14 +259,13 @@ class Controller:
                 system when it is not enabled.
         """
         if not self.free_air_enabled:
-            raise AttributeError('Free air is disabled')
-        await self._set_system_state(
-            'FreeAir', 'FreeAir', 'on' if value else 'off')
+            raise AttributeError("Free air is disabled")
+        await self._set_system_state("FreeAir", "FreeAir", "on" if value else "off")
 
     @property
     def temp_supply(self) -> Optional[float]:
         """Current supply, or in duct, air temperature."""
-        return float(self._get_system_state('Supply')) or None
+        return float(self._get_system_state("Supply")) or None
 
     @property
     def temp_setpoint(self) -> Optional[float]:
@@ -248,7 +273,7 @@ class Controller:
         This is the unit target temp with with rasMode == RAS,
         or with rasMode == master and ctrlZone == 13.
         """
-        return float(self._get_system_state('Setpoint')) or None
+        return float(self._get_system_state("Setpoint")) or None
 
     async def set_temp_setpoint(self, value: float):
         """AC unit setpoint temperature.
@@ -263,34 +288,31 @@ class Controller:
         """
         if value % 0.5 != 0:
             raise AttributeError(
-                'SetPoint \'{}\' not rounded to nearest 0.5'.format(value))
+                "SetPoint '{}' not rounded to nearest 0.5".format(value)
+            )
         if value < self.temp_min or value > self.temp_max:
-            raise AttributeError(
-                'SetPoint \'{}\' is out of range'.format(value))
-        await self._set_system_state(
-            'Setpoint', 'UnitSetpoint', value, str(value))
+            raise AttributeError("SetPoint '{}' is out of range".format(value))
+        await self._set_system_state("Setpoint", "UnitSetpoint", value, str(value))
 
     @property
     def temp_return(self) -> Optional[float]:
         """The return, or room, air temperature"""
-        return float(self._get_system_state('Temp')) or None
+        return float(self._get_system_state("Temp")) or None
 
     @property
     def eco_lock(self) -> bool:
         """True if eco lock setting is on."""
-        return self._get_system_state('EcoLock') == 'true'
+        return self._get_system_state("EcoLock") == "true"
 
     @property
     def temp_min(self) -> float:
         """The value for the eco lock minimum, or 15 if eco lock not set"""
-        return float(self._get_system_state('EcoMin')) \
-            if self.eco_lock else 15.0
+        return float(self._get_system_state("EcoMin")) if self.eco_lock else 15.0
 
     @property
     def temp_max(self) -> float:
         """The value for the eco lock maxium, or 30 if eco lock not set"""
-        return float(self._get_system_state('EcoMax')) \
-            if self.eco_lock else 30.0
+        return float(self._get_system_state("EcoMax")) if self.eco_lock else 30.0
 
     @property
     def ras_mode(self) -> str:
@@ -303,24 +325,24 @@ class Controller:
                 automatically selected dependant on the cooling/ heating need
                 of zones.
         """
-        return self._get_system_state('RAS')
+        return self._get_system_state("RAS")
 
     @property
     def zone_ctrl(self) -> int:
         """This indicates the zone that currently controls the AC unit.
         Value interpreted in combination with rasMode"""
-        return int(self._get_system_state('CtrlZone'))
+        return int(self._get_system_state("CtrlZone"))
 
     @property
     def zones_total(self) -> int:
         """This indicates the number of zones the system is configured for."""
-        return int(self._get_system_state('NoOfZones'))
+        return int(self._get_system_state("NoOfZones"))
 
     @property
     def zones_const(self) -> int:
         """This indicates the number of constant zones the system is
         configured for."""
-        return self._get_system_state('NoOfConst')
+        return self._get_system_state("NoOfConst")
 
     @property
     def sys_type(self) -> str:
@@ -331,19 +353,22 @@ class Controller:
             controlled, dependant on the zone settings.
         310: the system is zone control and unit control.
         """
-        return self._get_system_state('SysType')
+        return self._get_system_state("SysType")
 
     async def _refresh_all(self, notify: bool = True) -> None:
-        zones = int(self._system_settings['NoOfZones'])
+        zones = int(self._system_settings["NoOfZones"])
         await asyncio.gather(
             self._refresh_system(notify),
-            *[self._refresh_zone_group(i, notify)
-              for i in range(0, zones, 4)])
+            self._refresh_power(notify),
+            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
+        )
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
-        values = await self._get_resource('SystemSettings')  # type: Controller.ControllerData  # noqa
-        if self._device_uid != values['AirStreamDeviceUId']:
+        values = await self._get_resource(
+            "SystemSettings"
+        )  # type: Controller.ControllerData  # noqa
+        if self._device_uid != values["AirStreamDeviceUId"]:
             _LOG.error("_refresh_system called with unmatching device ID")
             return
 
@@ -352,20 +377,32 @@ class Controller:
         if notify:
             self._discovery.controller_update(self)
 
+    async def _refresh_power(self, notify: bool = True) -> None:
+        if self._power is None or not self._power.enabled:
+            return
+
+        updated = await self._power.refresh()
+
+        if updated and notify:
+            self._discovery.power_update(self)
+
     async def _refresh_zones(self, notify: bool = True) -> None:
         """Refresh the Zone information."""
-        zones = int(self._system_settings['NoOfZones'])
-        await asyncio.gather(*[self._refresh_zone_group(i, notify)
-                               for i in range(0, zones, 4)])
+        zones = int(self._system_settings["NoOfZones"])
+        await asyncio.gather(
+            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
+        )
 
     async def _refresh_zone_group(self, group: int, notify: bool = True):
         assert group in [0, 4, 8]
         zone_data_part = await self._get_resource(
-            "Zones{0}_{1}".format(group+1, group+4))
+            "Zones{0}_{1}".format(group + 1, group + 4)
+        )
 
-        for i in range(min(len(self.zones)-group, 4)):
+        for i in range(min(len(self.zones) - group, 4)):
             zone_data = zone_data_part[i]
-            self.zones[i+group]._update_zone(zone_data, notify)  # pylint: disable=protected-access  # noqa: E501
+            # pylint: disable=protected-access
+            self.zones[i + group]._update_zone(zone_data, notify)
 
     def _refresh_address(self, address):
         """Called from discovery to update the address"""
@@ -390,8 +427,9 @@ class Controller:
 
     def _ensure_connected(self) -> None:
         if self._fail_exception:
-            raise ConnectionError("Unable to connect to the controller") \
-                from self._fail_exception
+            raise ConnectionError(
+                "Unable to connect to the controller"
+            ) from self._fail_exception
 
     def _failed_connection(self, ex):
         if self._fail_exception:
@@ -405,7 +443,9 @@ class Controller:
     async def _retry_connection(self) -> None:
         _LOG.info(
             "Attempting to reconnect to server uid=%s ip=%s",
-            self.device_uid, self.device_ip)
+            self.device_uid,
+            self.device_ip,
+        )
 
         try:
             await self._refresh_all(notify=False)
@@ -415,24 +455,27 @@ class Controller:
             self._discovery.controller_update(self)
             for zone in self.zones:
                 self._discovery.zone_update(self, zone)
+            self._discovery.power_update(self)
             self._discovery.controller_reconnected(self)
         except ConnectionError as ex:
             # Expected, just carry on.
             _LOG.warning(
                 "Reconnect attempt for uid=%s failed with exception: %s",
-                self.device_uid, ex.__repr__())
+                self.device_uid,
+                ex.__repr__(),
+            )
 
     async def _get_resource(self, resource: str):
         try:
             session = self._discovery.session
             async with self._sending_lock, session.get(
-                    'http://%s/%s' % (self.device_ip, resource),
-                    timeout=Controller.REQUEST_TIMEOUT) as response:
+                "http://%s/%s" % (self.device_ip, resource),
+                timeout=Controller.REQUEST_TIMEOUT,
+            ) as response:
                 return await response.json(content_type=None)
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
-            raise ConnectionError("Unable to connect to the controller") \
-                from ex
+            raise ConnectionError("Unable to connect to the controller") from ex
 
     async def _send_command_async(self, command: str, data: Any):
         # For some reason aiohttp fragments post requests, which causes
@@ -447,32 +490,39 @@ class Controller:
             def connection_made(self, transport):
                 body = json.dumps({command: data}).encode()
                 header = (
-                    "POST /" + command + " HTTP/1.1\r\n" +
-                    "Host: " + device_ip + "\r\n" +
-                    "Content-Length: " + str(len(body)) + "\r\n" +
-                    "\r\n").encode()
-                _LOG.debug(
-                    "Writing message to " + device_ip + body.decode())
+                    "POST /"
+                    + command
+                    + " HTTP/1.1\r\n"
+                    + "Host: "
+                    + device_ip
+                    + "\r\n"
+                    + "Content-Length: "
+                    + str(len(body))
+                    + "\r\n"
+                    + "\r\n"
+                ).encode()
+                _LOG.debug("Writing message to " + device_ip + body.decode())
                 transport.write(header + body)
-                self.transport = transport  # pylint: disable=attribute-defined-outside-init  # noqa: E501
+                # pylint: disable=attribute-defined-outside-init
+                self.transport = transport
 
             def data_received(self, data):
                 response.append(data.decode())
 
             def eof_received(self):
                 self.transport.close()
-                lines = ''.join(response).split('\r\n')
+                lines = "".join(response).split("\r\n")
                 if not lines:
                     return
-                parts = lines[0].split(' ')
+                parts = lines[0].split(" ")
                 if len(parts) != 3:
                     return
                 if int(parts[1]) != 200:
                     on_complete.set_exception(
                         aiohttp.ClientResponseError(
-                            None, None,
-                            status=int(parts[1]),
-                            message=parts[2]))
+                            None, None, status=int(parts[1]), message=parts[2]
+                        )
+                    )
                 elif len(lines) > 2 and len(lines[-2]) == 0:
                     on_complete.set_result(lines[-1])
                 else:
@@ -481,9 +531,10 @@ class Controller:
         # The server doesn't tolerate multiple requests in fly concurrently
         try:
             async with self._sending_lock, timeout(Controller.REQUEST_TIMEOUT) as timer:
+                # pylint: disable=unnecessary-lambda
                 transport, _ = await loop.create_connection(  # type: ignore  # noqa: E501
-                    lambda: _PostProtocol(),  # pylint: disable=unnecessary-lambda  # noqa: E501
-                    self.device_ip, 80)  # mypy: ignore
+                    lambda: _PostProtocol(), self.device_ip, 80
+                )
 
                 # wait for response to be recieved.
                 await on_complete
@@ -497,5 +548,4 @@ class Controller:
 
         except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
-            raise ConnectionError(
-                "Unable to connect to controller") from ex
+            raise ConnectionError("Unable to connect to controller") from ex

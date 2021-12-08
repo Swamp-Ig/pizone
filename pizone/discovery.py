@@ -3,8 +3,15 @@
 import asyncio
 import logging
 from abc import abstractmethod, ABC
-from asyncio import (AbstractEventLoop, Condition, DatagramProtocol,
-                     DatagramTransport, Future, Task, CancelledError, )
+from asyncio import (
+    AbstractEventLoop,
+    Condition,
+    DatagramProtocol,
+    DatagramTransport,
+    Future,
+    Task,
+    CancelledError,
+)
 from logging import Logger
 from typing import Dict, List, Set, Optional
 
@@ -15,23 +22,24 @@ import netifaces
 from .controller import Controller
 from .zone import Zone
 
-DISCOVERY_MSG = b'IASD'
+DISCOVERY_MSG = b"IASD"
 DISCOVERY_PORT = 12107
 
 UPDATE_PORT = 7005
-CHANGED_SYSTEM = b'iZoneChanged_System'
-CHANGED_ZONES = b'iZoneChanged_Zones'
-CHANGED_SCHEDULES = b'iZoneChanged_Schedules'
+CHANGED_SYSTEM = b"iZoneChanged_System"
+CHANGED_ZONES = b"iZoneChanged_Zones"
+CHANGED_SCHEDULES = b"iZoneChanged_Schedules"
 
 DISCOVERY_TIMEOUT = 2.0
-DISCOVERY_SLEEP = 5.0*60.0
+DISCOVERY_SLEEP = 5.0 * 60.0
 DISCOVERY_RESCAN = 20.0
 
-_LOG = logging.getLogger('pizone.discovery')  # type: Logger
+_LOG = logging.getLogger("pizone.discovery")  # type: Logger
 
 
 class LogExceptions:
     """Utility context manager to log and discard exceptions"""
+
     def __init__(self, func: str) -> None:
         self.func = func
 
@@ -40,8 +48,9 @@ class LogExceptions:
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type:
-            _LOG.exception(
-                "Exception ignored when calling listener %s", self.func)
+            _LOG.error(
+                "Exception ignored when calling listener %s", self.func, exc_info=True
+            )
         return True
 
 
@@ -73,6 +82,9 @@ class Listener:
         """Called when a zone update message is recieved from the controller
         Zone data will be set to new value.
         """
+
+    def power_update(self, ctrl: Controller) -> None:
+        """Called when the power monitor updates."""
 
 
 class AbstractDiscoveryService(ABC):
@@ -126,8 +138,9 @@ class AbstractDiscoveryService(ABC):
 class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     """Discovery protocol class. Not for external use."""
 
-    def __init__(self, loop: AbstractEventLoop = None,
-                 session: ClientSession = None) -> None:
+    def __init__(
+        self, loop: AbstractEventLoop = None, session: ClientSession = None
+    ) -> None:
         """Start the discovery protocol using the supplied loop.
 
         raises:
@@ -192,6 +205,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         def callback():
             for controller in self._controllers.values():
                 listener.controller_discovered(controller)
+
         self.loop.call_soon(callback)
 
     def remove_listener(self, listener: Listener) -> None:
@@ -199,9 +213,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self._listeners.remove(listener)
 
     def controller_discovered(self, ctrl: Controller) -> None:
-        _LOG.info(
-            "New controller found: id=%s ip=%s",
-            ctrl.device_uid, ctrl.device_ip)
+        _LOG.info("New controller found: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip)
         for listener in self._listeners:
             with LogExceptions("controller_discovered"):
                 listener.controller_discovered(ctrl)
@@ -209,7 +221,9 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
         _LOG.warning(
             "Connection to controller lost: id=%s ip=%s",
-            ctrl.device_uid, ctrl.device_ip)
+            ctrl.device_uid,
+            ctrl.device_ip,
+        )
         self._disconnected.add(ctrl.device_uid)
         self.create_task(self._rescan())
         for listener in self._listeners:
@@ -218,8 +232,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 
     def controller_reconnected(self, ctrl: Controller) -> None:
         _LOG.warning(
-            "Controller reconnected: id=%s ip=%s",
-            ctrl.device_uid, ctrl.device_ip)
+            "Controller reconnected: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip
+        )
         self._disconnected.remove(ctrl.device_uid)
         for listener in self._listeners:
             with LogExceptions("controller_reconnected"):
@@ -235,6 +249,11 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             with LogExceptions("zone_update"):
                 listener.zone_update(ctrl, zone)
 
+    def power_update(self, ctrl: Controller) -> None:
+        for listener in self._listeners:
+            with LogExceptions("power_update"):
+                listener.power_update(ctrl)
+
     @property
     def controllers(self) -> Dict[str, Controller]:
         """Dictionary of all the currently discovered controllers"""
@@ -245,9 +264,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         if self._own_session:
             self.session = ClientSession(loop=self.loop)
         await self.loop.create_datagram_endpoint(
-            lambda: self,
-            local_addr=('0.0.0.0', UPDATE_PORT),
-            allow_broadcast=True)
+            lambda: self, local_addr=("0.0.0.0", UPDATE_PORT), allow_broadcast=True
+        )
 
     def connection_made(self, transport: DatagramTransport) -> None:  # type: ignore  # noqa: E501
         if self._close_task:
@@ -264,7 +282,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             if not inetaddrs:
                 continue
             for inetaddr in inetaddrs:
-                broadcast = inetaddr.get('broadcast')
+                broadcast = inetaddr.get("broadcast")
                 if broadcast:
                     yield broadcast
 
@@ -281,8 +299,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
 
             try:
                 async with timeout(
-                        DISCOVERY_RESCAN if self._disconnected
-                        else DISCOVERY_SLEEP):
+                    DISCOVERY_RESCAN if self._disconnected else DISCOVERY_SLEEP
+                ):
                     async with self._scan_condition:
                         await self._scan_condition.wait()
             except asyncio.TimeoutError:
@@ -333,9 +351,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         return self._close_task is not None
 
     def error_received(self, exc):
-        _LOG.warning(
-            "Error passed and ignored to error_recieved: %s",
-            repr(exc))
+        _LOG.warning("Error passed and ignored to error_recieved", exc_info=True)
 
     def _find_by_addr(self, addr: str) -> Optional[Controller]:
         for _, ctrl in self._controllers.items():
@@ -346,10 +362,10 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     async def _wrap_update(self, coro):
         try:
             await coro
-        except ConnectionError as ex:
+        except ConnectionError:
             _LOG.warning(
-                "Unable to complete %s due to connection error: %s",
-                coro, repr(ex))
+                "Unable to complete %s due to connection error", coro, exc_info=True
+            )
 
     def datagram_received(self, data, addr):
         _LOG.debug("Datagram Recieved %s", data)
@@ -365,40 +381,51 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             ctrl = self._find_by_addr(addr)
             if not ctrl:
                 return
-            return self.create_task(self._wrap_update(ctrl._refresh_system()))  # pylint: disable=protected-access  # noqa: E501
+            # pylint: disable=protected-access
+            return self.create_task(self._wrap_update(ctrl._refresh_system()))
         elif data == CHANGED_ZONES:
             ctrl = self._find_by_addr(addr)
             if not ctrl:
                 return
-            return self.create_task(self._wrap_update(ctrl._refresh_zones()))  # pylint: disable=protected-access  # noqa: E501
+            # pylint: disable=protected-access
+            return self.create_task(self._wrap_update(ctrl._refresh_zones()))
         else:
             return self._discovery_recieved(data)
 
     def _discovery_recieved(self, data):
-        message = data.decode().split(',')
-        if (len(message) < 3 or message[0] != 'ASPort_12107'
-                or (len(message) >= 4
-                    and not message[3] in ('iZone', 'iZoneV2'))):
+        message = data.decode().split(",")
+        if (
+            len(message) < 3
+            or message[0] != "ASPort_12107"
+            or (len(message) >= 4 and {"iZone", "iZoneV2"}.isdisjoint(message[3:]))
+        ):
             _LOG.warning("Invalid Message Received: %s", data.decode())
             return
 
-        device_uid = message[1].split('_')[1]
-        device_ip = message[2].split('_')[1]
+        device_uid = message[1].split("_")[1]
+        device_ip = message[2].split("_")[1]
 
+        # pylint: disable=protected-access
         if device_uid not in self._controllers:
             # Create new controller.
             # We don't have to set the loop here since it's set for
             # the thread already.
-            is_v2 = len(message) >= 4 and message[3] == 'iZoneV2'
-            controller = self._create_controller(device_uid, device_ip, is_v2)
+            is_v2 = len(message) >= 4 and "iZoneV2" in message[3:]
+            is_ipower = len(message) >= 4 and "iPower" in message[3:]
+            controller = self._create_controller(
+                device_uid, device_ip, is_v2, is_ipower
+            )
 
             async def initialize_controller():
                 try:
-                    await controller._initialize()  # pylint: disable=protected-access  # noqa: E501
+                    await controller._initialize()  # noqa: E501
                 except ConnectionError as ex:
                     _LOG.warning(
                         "Can't connect to discovered server at IP '%s'"
-                        " exception: %s", device_ip, repr(ex))
+                        " exception: %s",
+                        device_ip,
+                        repr(ex),
+                    )
                     return
 
                 self._controllers[device_uid] = controller
@@ -407,16 +434,21 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             return self.create_task(initialize_controller())
         else:
             controller = self._controllers[device_uid]
-            controller._refresh_address(device_ip)  # pylint: disable=protected-access  # noqa: E501
+            controller._refresh_address(device_ip)
 
-    def _create_controller(self, device_uid, device_ip, is_v2):
+    def _create_controller(self, device_uid, device_ip, is_v2, is_ipower):
         return Controller(
-            self, device_uid=device_uid, device_ip=device_ip, is_v2=is_v2)
+            self,
+            device_uid=device_uid,
+            device_ip=device_ip,
+            is_v2=is_v2,
+            is_ipower=is_ipower,
+        )
 
 
-def discovery(*listeners: Listener,
-              loop: AbstractEventLoop = None,
-              session: ClientSession = None) -> AbstractDiscoveryService:
+def discovery(
+    *listeners: Listener, loop: AbstractEventLoop = None, session: ClientSession = None
+) -> AbstractDiscoveryService:
     """Create discovery service. Returned object is a asynchronous
     context manager so can be used with 'async with' statement.
     Alternately call start_discovery or start_discovery_async to commence
