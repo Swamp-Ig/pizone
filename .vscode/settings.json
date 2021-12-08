@@ -12,4 +12,5 @@
     "python.linting.mypyEnabled": true,
     "python.pythonPath": "venv\\Scripts\\python.exe",
     "python.globalModuleInstallation": true,
+    "python.formatting.provider": "black",
 }
