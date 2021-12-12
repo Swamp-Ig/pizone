@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from json.decoder import JSONDecodeError
 import logging
 from asyncio import Lock, Condition
 from enum import Enum
@@ -142,8 +143,8 @@ class Controller:
             try:
                 await self._refresh_all()
                 _LOG.debug("Polling unit %s.", self._device_uid)
-            except ConnectionError as ex:
-                _LOG.debug("Poll failed due to exeption %s.", repr(ex))
+            except ConnectionError:
+                _LOG.debug("Poll failed due to exeption.", exc_info=True)
             except Exception:
                 _LOG.error("Unexpected exception", exc_info=True)
 
@@ -460,9 +461,9 @@ class Controller:
         except ConnectionError as ex:
             # Expected, just carry on.
             _LOG.warning(
-                "Reconnect attempt for uid=%s failed with exception: %s",
+                "Reconnect attempt for uid=%s failed with exception",
                 self.device_uid,
-                ex.__repr__(),
+                exc_info=True,
             )
 
     async def _get_resource(self, resource: str):
@@ -472,7 +473,14 @@ class Controller:
                 "http://%s/%s" % (self.device_ip, resource),
                 timeout=Controller.REQUEST_TIMEOUT,
             ) as response:
-                return await response.json(content_type=None)
+                try:
+                    return await response.json(content_type=None)
+                except JSONDecodeError as ex:
+                    text = await response.text()
+                    if text[-4:] == '{OK}':
+                        return json.loads(text[:-4])
+                    _LOG.error("Decode error for \"%s\"", text, exc_info=True)
+                    raise ex
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
