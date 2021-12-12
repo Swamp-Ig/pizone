@@ -150,7 +150,7 @@ class Power:
 
     def __init__(self, controller) -> None:
         """Init function."""
-        # pylint: disable=import-outside-toplevel
+        # pylint: disable=import-outside-toplevel, unused-import
         from .controller import Controller
 
         self._controller = controller  # type: Controller
