@@ -186,7 +186,17 @@ class Power:
             "PowerRequest", {"Type": req_type, "No": 0, "No1": 0}
         )
 
-        return json.loads(datas)[result]
+        try:
+            data = json.loads(datas)
+        except json.decoder.JSONDecodeError as ex:
+            if datas[-4:] == "{OK}":
+                data = json.loads(datas[:-4])
+            else:
+                _LOG.error('Decode error for "%s"', datas, exc_info=True)
+                raise ConnectionError(
+                    "Unable to decode response, see error log."
+                ) from ex
+        return data[result]
 
     @property
     def enabled(self) -> bool:

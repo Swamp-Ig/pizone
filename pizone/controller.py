@@ -458,7 +458,7 @@ class Controller:
                 self._discovery.zone_update(self, zone)
             self._discovery.power_update(self)
             self._discovery.controller_reconnected(self)
-        except ConnectionError as ex:
+        except ConnectionError:
             # Expected, just carry on.
             _LOG.warning(
                 "Reconnect attempt for uid=%s failed with exception",
@@ -477,10 +477,12 @@ class Controller:
                     return await response.json(content_type=None)
                 except JSONDecodeError as ex:
                     text = await response.text()
-                    if text[-4:] == '{OK}':
+                    if text[-4:] == "{OK}":
                         return json.loads(text[:-4])
-                    _LOG.error("Decode error for \"%s\"", text, exc_info=True)
-                    raise ex
+                    _LOG.error('Decode error for "%s"', text, exc_info=True)
+                    raise ConnectionError(
+                        "Unable to decode response from the controller"
+                    ) from ex
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
