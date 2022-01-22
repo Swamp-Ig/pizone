@@ -4,10 +4,12 @@ Power object.
 Various bits of data relating to power monitoring.
 """
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Dict, Any, Optional, Tuple
 from enum import IntEnum, unique
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Set
 
 _LOG = logging.getLogger("pizone.power")
 
@@ -32,24 +34,29 @@ class BatteryLevel(IntEnum):
 class PowerChannel:
     """Channel within power device"""
 
-    def __init__(self, device, channel):
+    def __init__(self, device: PowerDevice, index: int):
         self._device = device
-        self._channel = channel
+        self._index = index
 
     @property
     def _config(self) -> Dict[str, Any]:
         # pylint: disable=protected-access
-        return self._device._config["Channels"][self._channel]
+        return self._device._config["Channels"][self._index]
 
     @property
     def _status(self) -> Dict[str, Any]:
         # pylint: disable=protected-access
-        return self._device._status["Ch"][self._channel]
+        return self._device._status["Ch"][self._index]
 
     @property
-    def channel(self) -> int:
+    def device(self) -> PowerDevice:
+        """Gets the parent power device"""
+        return self._device
+
+    @property
+    def index(self) -> int:
         """Channel index"""
-        return self._channel
+        return self._index
 
     @property
     def enabled(self) -> bool:
@@ -63,30 +70,30 @@ class PowerChannel:
 
     @property
     def group_number(self) -> Optional[int]:
-        """Power channel name."""
+        """Group number"""
         num = self._config["GrNo"]
         return num if num < 255 else None
 
     @property
     def generate(self) -> bool:
-        """True if this channel is used in consumpton."""
+        """True if this channel is generating power"""
         return bool(self._config["Generate"])
 
     @property
     def add_to_total(self) -> bool:
-        """Add to group total."""
+        """Add to group total"""
         return bool(self._config["AddToTotal"])
 
     @property
     def status_power(self) -> int:
-        """Device index."""
+        """Power in watts"""
         return self._status["Pwr"]
 
 
 class PowerDevice:
     """Device for power information."""
 
-    def __init__(self, power, index):
+    def __init__(self, power: Power, index: int):
         self._power = power
         self._index = index
         self._channels = tuple(PowerChannel(self, i) for i in range(0, 3))
@@ -108,17 +115,17 @@ class PowerDevice:
 
     @property
     def enabled(self) -> bool:
-        """Add to group total."""
+        """Enabled flag"""
         return bool(self._config["Enabled"])
 
     @property
     def status_ok(self) -> bool:
-        """Add to group total."""
+        """True if device OK"""
         return bool(self._status["Ok"])
 
     @property
     def status_batt(self) -> BatteryLevel:
-        """Add to group total."""
+        """Battery level"""
         return BatteryLevel(self._status["Batt"])
 
     @property
@@ -130,19 +137,34 @@ class PowerDevice:
 class PowerGroup:
     """Grouped power devices"""
 
-    def __init__(self, power, channel):
+    def __init__(self, power: Power, channels: Iterable[PowerChannel]):
         self._power = power
-        self._channel = channel
+        self._channels = tuple(channels)
+        # get unique devices
+        devices: Set[PowerDevice] = set()
+        for chan in channels:
+            devices.add(chan.device)
+        self._devices = tuple(devices)
+
+    @property
+    def group_number(self) -> int:
+        """The group id."""
+        return self._channels[0].group_number or -1
 
     @property
     def name(self) -> str:
         """The group name."""
-        return self._channel.name
+        return self._channels[0].name
+
+    @property
+    def status_ok(self) -> bool:
+        """True if the power group is connected"""
+        return all(d.status_ok for d in self._devices)
 
     @property
     def status_power(self) -> int:
         """Currently using power status."""
-        return self._channel.status_power
+        return self._channels[0].status_power
 
 
 class Power:
@@ -162,13 +184,12 @@ class Power:
     async def init(self) -> None:
         """Initialise the power settings."""
         self._config = await self._do_request(1, "PowerMonitorConfig")
-        groups = {}
+        gdict: Dict[int, List[PowerChannel]] = {}
         for dev in self.devices:
             for chan in dev.channels:
-                grp = chan.group_number
-                if grp is not None and grp not in groups:
-                    groups[grp] = PowerGroup(self, chan)
-        self._groups = tuple(groups.values())
+                if chan.group_number is not None:
+                    gdict.setdefault(chan.group_number, []).append(chan)
+        self._groups = tuple(PowerGroup(self, gl) for gl in gdict.values())
 
     async def refresh(self) -> bool:
         """Refreshes the power usage data."""
@@ -234,6 +255,6 @@ class Power:
         return self._devices
 
     @property
-    def groups(self):
+    def groups(self) -> Optional[Tuple[PowerGroup, ...]]:
         """Available power groups."""
         return self._groups
