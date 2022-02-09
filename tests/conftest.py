@@ -1,27 +1,27 @@
-from asyncio import AbstractEventLoop
-from typing import Any, Dict, List, Tuple
+from asyncio import Event, wait_for
 from copy import deepcopy
-
+from typing import Any, Dict, List, Tuple
 from unittest.mock import AsyncMock
-from pytest import fixture
-from aiohttp import ClientSession
 
-from pizone import Controller
-from pizone.discovery import DiscoveryService, CHANGED_SYSTEM, CHANGED_ZONES
+from pizone import Controller, Listener
+from pizone.discovery import CHANGED_SYSTEM, CHANGED_ZONES, _DiscoveryServiceImpl
+from pytest import fixture
 
 
 class MockController(Controller):
-
-    def __init__(self, discovery, device_uid: str, device_ip: str, is_v2) -> None:
-        super().__init__(discovery, device_uid, device_ip, is_v2)
+    def __init__(
+        self, discovery, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
+    ) -> None:
+        super().__init__(discovery, device_uid, device_ip, is_v2, is_ipower)
         from .resources import SYSTEMS
+
         self.resources = deepcopy(SYSTEMS[device_uid])  # type: Dict[str,Any]
         self.sent = []  # type: List[Tuple[str,Any]]
-        self.connected = True
+        self._connected = True
 
     def _check_connected(self):
-        if not self.connected or not self.discovery.connected:
-            ex = OSError('Not Connected')
+        if not self._connected or not self.discovery.connected:
+            ex = OSError("Not Connected")
             self._failed_connection(ex)
             raise ConnectionError("Explicitly Disconnected") from ex
 
@@ -31,8 +31,7 @@ class MockController(Controller):
         result = self.resources.get(resource)
         if result:
             return deepcopy(result)
-        raise ConnectionError(
-            "Mock resource '{}' not available".format(resource))
+        raise ConnectionError("Mock resource '{}' not available".format(resource))
 
     async def _send_command_async(self, command: str, data: Any):
         """Mock out the network IO for _send_command."""
@@ -40,41 +39,72 @@ class MockController(Controller):
         self.sent.append((command, data))
 
     async def change_system_state(self, state: str, value: Any) -> None:
-        self.resources['SystemSettings'][state] = value
-        await self.discovery._process_datagram(
-           CHANGED_SYSTEM, ('8.8.8.8', 12107))
+        self.resources["SystemSettings"][state] = value
+        await self.discovery._process_datagram(CHANGED_SYSTEM, ("8.8.8.8", 12107))
 
-    async def change_zone_state(
-            self, zone: int, state: str, value: Any) -> None:
+    async def change_zone_state(self, zone: int, state: str, value: Any) -> None:
         idx = zone % 4
-        segment = 'Zones{}_{}'.format(zone-idx, zone-idx+4)
+        segment = "Zones{}_{}".format(zone - idx, zone - idx + 4)
         self.resources[segment][idx][state] = value
-        await self.discovery._process_datagram(
-           CHANGED_ZONES, ('8.8.8.8', 12107))
+        await self.discovery._process_datagram(CHANGED_ZONES, ("8.8.8.8", 12107))
 
 
-class MockDiscoveryService(DiscoveryService):
-
-    def __init__(self, loop: AbstractEventLoop = None,
-                 session: ClientSession = None) -> None:
-        super().__init__(loop=loop, session=session)
+class MockDiscoveryService(_DiscoveryServiceImpl):
+    def __init__(self) -> None:
+        super().__init__()
         self._send_broadcasts = AsyncMock()  # type: ignore
         self.datagram_received = AsyncMock()  # type: ignore
         self.connected = True
 
-    def _create_controller(self, device_uid, device_ip, is_v2):
-        return MockController(self, device_uid=device_uid, device_ip=device_ip, is_v2=is_v2)
+    def _create_controller(self, device_uid, device_ip, is_v2, is_ipower):
+        return MockController(
+            self,
+            device_uid=device_uid,
+            device_ip=device_ip,
+            is_v2=is_v2,
+            is_ipower=is_ipower,
+        )
+
+
+async def _register_mock_service(svc, datagram: str):
+    class ListenerConnected(Listener):
+        def __init__(self) -> None:
+            self._controller = None
+            self._connected = Event()
+
+        def controller_discovered(self, _ctrl):
+            if self._controller is not None:
+                return
+            self._controller = _ctrl
+            self._connected.set()
+
+        async def await_controller(self):
+            await wait_for(self._connected.wait(), 5)
+            return self._controller
+
+    listener = ListenerConnected()
+    svc.add_listener(listener)
+
+    await svc.start_discovery()
+
+    svc._process_datagram(
+        datagram,
+        ("8.8.8.8", 12107),
+    )
+
+    await listener.await_controller()
 
 
 @fixture
 def service(event_loop):
     """Fixture to provide a test instance of HASS."""
-    service = MockDiscoveryService(event_loop)
-    event_loop.run_until_complete(service.start_discovery())
+    service = MockDiscoveryService()
 
-    event_loop.run_until_complete(service._process_datagram(
-        b'ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate',
-        ('8.8.8.8', 12107)))
+    event_loop.run_until_complete(
+        _register_mock_service(
+            service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
+        )
+    )
 
     yield service
 
@@ -84,12 +114,11 @@ def service(event_loop):
 @fixture
 def legacy_service(event_loop):
     """Fixture to provide a test instance of HASS."""
-    service = MockDiscoveryService(event_loop)
-    event_loop.run_until_complete(service.start_discovery())
+    service = MockDiscoveryService()
 
-    event_loop.run_until_complete(service._process_datagram(
-        b'ASPort_12107,Mac_000000001,IP_8.8.8.8',
-        ('8.8.8.8', 12107)))
+    event_loop.run_until_complete(
+        _register_mock_service(service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
+    )
 
     yield service
 

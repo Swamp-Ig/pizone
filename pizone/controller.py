@@ -2,17 +2,17 @@
 
 import asyncio
 import json
-from json.decoder import JSONDecodeError
 import logging
-from asyncio import Lock, Condition
+from asyncio import Condition, Lock
 from enum import Enum
-from typing import Any, Dict, List, Union, Optional
+from json.decoder import JSONDecodeError
+from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
 from async_timeout import timeout
 
-from .zone import Zone
 from .power import Power
+from .zone import Zone
 
 _LOG = logging.getLogger("pizone.controller")
 
@@ -44,9 +44,6 @@ class Controller:
 
     REQUEST_TIMEOUT = 3
     """Time to wait for results from server."""
-
-    CONNECT_RETRY_TIMEOUT = 20
-    """Cool-down period for retrying to connect to the controller"""
 
     REFRESH_INTERVAL = 25.0
     """Interval between refreshes of data."""
@@ -141,8 +138,8 @@ class Controller:
 
             # pylint: disable=broad-except
             try:
-                await self._refresh_all()
                 _LOG.debug("Polling unit %s.", self._device_uid)
+                await self._refresh_all()
             except ConnectionError:
                 _LOG.debug("Poll failed due to exeption.", exc_info=True)
             except Exception:
@@ -151,6 +148,11 @@ class Controller:
     async def _rescan(self) -> None:
         async with self._scan_condition:
             self._scan_condition.notify()
+
+    @property
+    def connected(self) -> bool:
+        """True if the controller is currently connected"""
+        return self._fail_exception is None
 
     @property
     def power(self) -> Optional[Power]:
@@ -358,11 +360,11 @@ class Controller:
 
     async def _refresh_all(self, notify: bool = True) -> None:
         zones = int(self._system_settings["NoOfZones"])
-        await asyncio.gather(
-            self._refresh_system(notify),
-            self._refresh_power(notify),
-            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
-        )
+        # this has to be done sequentially
+        await self._refresh_system(notify)
+        await self._refresh_power(notify)
+        for i in range(0, zones, 4):
+            await self._refresh_zone_group(i, notify)
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
@@ -491,7 +493,7 @@ class Controller:
         # For some reason aiohttp fragments post requests, which causes
         # the server to fail disgracefully. Implimented rough and dirty
         # HTTP POST client.
-        loop = self.discovery.loop
+        loop = asyncio.get_running_loop()
         on_complete = loop.create_future()
         device_ip = self.device_ip
         response = []

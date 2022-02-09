@@ -5,7 +5,7 @@ Various properties allow interogation and setting of zone data.
 """
 
 from enum import Enum
-from typing import Dict, Union, Optional
+from typing import Dict, Optional, Union
 
 
 class Zone:
@@ -172,9 +172,7 @@ class Zone:
 
     def _fire_listeners(self) -> None:
         # pylint: disable=protected-access
-        self._controller._discovery.zone_update(
-            self._controller, self
-        )
+        self._controller._discovery.zone_update(self._controller, self)
 
     def _get_zone_state(self, state):
         self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
@@ -183,6 +181,4 @@ class Zone:
     async def _send_command(self, command, data: Union[str, float, int]):
         send_data = {"ZoneNo": str(self._index + 1), "Command": str(data)}
         # pylint: disable=protected-access
-        await self._controller._send_command_async(
-            command, send_data
-        )
+        await self._controller._send_command_async(command, send_data)

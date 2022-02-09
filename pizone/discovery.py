@@ -2,22 +2,21 @@
 
 import asyncio
 import logging
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 from asyncio import (
-    AbstractEventLoop,
+    CancelledError,
     Condition,
     DatagramProtocol,
     DatagramTransport,
     Future,
     Task,
-    CancelledError,
 )
 from logging import Logger
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Optional, Set
 
-from async_timeout import timeout
-from aiohttp import ClientSession
 import netifaces
+from aiohttp import ClientSession
+from async_timeout import timeout
 
 from .controller import Controller
 from .zone import Zone
@@ -87,7 +86,7 @@ class Listener:
         """Called when the power monitor updates."""
 
 
-class AbstractDiscoveryService(ABC):
+class DiscoveryService(ABC):
     """Interface for discovery.
 
     This service is both a context manager, and an asynchronous context
@@ -135,12 +134,10 @@ class AbstractDiscoveryService(ABC):
         """Dictionary of all the currently discovered controllers"""
 
 
-class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
+class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
     """Discovery protocol class. Not for external use."""
 
-    def __init__(
-        self, loop: AbstractEventLoop = None, session: ClientSession = None
-    ) -> None:
+    def __init__(self, session: ClientSession = None) -> None:
         """Start the discovery protocol using the supplied loop.
 
         raises:
@@ -153,14 +150,6 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self._close_task = None  # type: Optional[Task]
 
         _LOG.info("Starting discovery protocol")
-        if not loop:
-            if session:
-                self.loop = session.loop
-            else:
-                self.loop = asyncio.get_event_loop()
-        else:
-            self.loop = loop
-
         self.session = session
         self._own_session = session is None
 
@@ -171,7 +160,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         self._tasks = []  # type: List[Future]
 
     # Async context manager interface
-    async def __aenter__(self) -> AbstractDiscoveryService:
+    async def __aenter__(self) -> DiscoveryService:
         await self.start_discovery()
         return self
 
@@ -189,7 +178,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     # managing the task list.
     def create_task(self, coro) -> Task:
         """Create a task in the event loop. Keeps track of created tasks."""
-        task = self.loop.create_task(coro)  # type: Task
+        task = asyncio.get_running_loop().create_task(coro)  # type: Task
         self._tasks.append(task)
 
         task.add_done_callback(self._task_done_callback)
@@ -206,7 +195,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             for controller in self._controllers.values():
                 listener.controller_discovered(controller)
 
-        self.loop.call_soon(callback)
+        asyncio.get_running_loop().call_soon(callback)
 
     def remove_listener(self, listener: Listener) -> None:
         """Remove a listener"""
@@ -262,8 +251,8 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
     # Non-context versions of starting.
     async def start_discovery(self) -> None:
         if self._own_session:
-            self.session = ClientSession(loop=self.loop)
-        await self.loop.create_datagram_endpoint(
+            self.session = ClientSession()
+        await asyncio.get_running_loop().create_datagram_endpoint(
             lambda: self, local_addr=("0.0.0.0", UPDATE_PORT), allow_broadcast=True
         )
 
@@ -326,7 +315,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
             await self._close_task
             return
         _LOG.info("Close called on discovery service.")
-        self._close_task = asyncio.current_task(loop=self.loop)
+        self._close_task = asyncio.current_task()
         if self._transport:
             self._transport.close()
 
@@ -342,7 +331,7 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         _LOG.debug("Connection Lost")
         if not self._close_task:
             _LOG.error("Connection Lost unexpectedly: %s", repr(exc))
-            self.loop.create_task(self.close())
+            asyncio.get_running_loop().create_task(self.close())
 
     @property
     def is_closed(self) -> bool:
@@ -446,14 +435,12 @@ class DiscoveryService(AbstractDiscoveryService, DatagramProtocol, Listener):
         )
 
 
-def discovery(
-    *listeners: Listener, loop: AbstractEventLoop = None, session: ClientSession = None
-) -> AbstractDiscoveryService:
+def discovery(*listeners: Listener, session: ClientSession = None) -> DiscoveryService:
     """Create discovery service. Returned object is a asynchronous
     context manager so can be used with 'async with' statement.
     Alternately call start_discovery or start_discovery_async to commence
     the discovery process."""
-    service = DiscoveryService(loop=loop, session=session)
+    service = _DiscoveryServiceImpl(session=session)
     for listener in listeners:
         service.add_listener(listener)
     return service

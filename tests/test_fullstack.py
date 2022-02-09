@@ -1,9 +1,9 @@
 """Test for controller"""
 
-from asyncio import Event, wait_for, TimeoutError
-from pytest import raises
+from asyncio import Event, TimeoutError, wait_for
 
 from pizone import Controller, Listener, Zone, discovery
+from pytest import fail, raises
 
 
 class ListenerTesting(Listener):
@@ -79,10 +79,7 @@ async def test_full_stack():
     listener = ListenerTesting()
 
     async with discovery(listener):
-        try:
-            ctrl = await listener.await_controller()
-        except TimeoutError:
-            return
+        ctrl = await listener.await_controller()
 
         dump_data(ctrl)
 
@@ -152,10 +149,7 @@ async def test_reconnect():
     listener = ListenerTesting()
 
     async with discovery(listener):
-        try:
-            ctrl = await listener.await_controller()
-        except TimeoutError:
-            return
+        ctrl = await listener.await_controller()
 
         assert listener.connect_count == 1
 
@@ -179,10 +173,7 @@ async def test_power():
     listener = ListenerTesting()
 
     async with discovery(listener):
-        try:
-            ctrl = await listener.await_controller()
-        except TimeoutError:
-            return
+        ctrl = await listener.await_controller()
 
         result = ctrl.power
 
