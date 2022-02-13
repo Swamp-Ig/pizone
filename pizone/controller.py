@@ -145,7 +145,8 @@ class Controller:
             except Exception:
                 _LOG.error("Unexpected exception", exc_info=True)
 
-    async def _rescan(self) -> None:
+    async def refresh(self) -> None:
+        """Queue a refresh of all controller data."""
         async with self._scan_condition:
             self._scan_condition.notify()
 
@@ -426,7 +427,7 @@ class Controller:
         # Update state and trigger rescan
         self._system_settings[state] = value
         self._discovery.controller_update(self)
-        await self._rescan()
+        await self.refresh()
 
     def _ensure_connected(self) -> None:
         if self._fail_exception:
