@@ -204,19 +204,9 @@ class Power:
     async def _do_request(self, req_type: int, result: str) -> Dict[str, Any]:
         # pylint: disable=protected-access
         datas = await self._controller._send_command_async(
-            "PowerRequest", {"Type": req_type, "No": 0, "No1": 0}
+            "PowerRequest", {"PowerRequest":{"Type": req_type, "No": 0, "No1": 0}}
         )
-
-        try:
-            data = json.loads(datas)
-        except json.decoder.JSONDecodeError as ex:
-            if datas[-4:] == "{OK}":
-                data = json.loads(datas[:-4])
-            else:
-                _LOG.error('Decode error for "%s"', datas, exc_info=True)
-                raise ConnectionError(
-                    "Unable to decode response, see error log."
-                ) from ex
+        data = json.loads(datas)
         return data[result]
 
     @property

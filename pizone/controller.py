@@ -422,7 +422,7 @@ class Controller:
     async def _set_system_state(self, state, command, value, send=None):
         if send is None:
             send = value
-        await self._send_command_async(command, send)
+        await self._send_command_async(command, {command: send})
 
         # Update state and trigger rescan
         self._system_settings[state] = value
@@ -497,68 +497,59 @@ class Controller:
         loop = asyncio.get_running_loop()
         on_complete = loop.create_future()
         device_ip = self.device_ip
-        response = []
 
         class _PostProtocol(asyncio.Protocol):
+            def __init__(self) -> None:
+                self.response = bytearray()
+
             def connection_made(self, transport):
-                body = json.dumps({command: data}).encode()
+                body = json.dumps(data).encode("latin_1")
                 header = (
-                    "POST /"
-                    + command
-                    + " HTTP/1.1\r\n"
-                    + "Host: "
-                    + device_ip
-                    + "\r\n"
-                    + "Content-Length: "
-                    + str(len(body))
-                    + "\r\n"
-                    + "\r\n"
+                    f"POST /{command} HTTP/1.1\r\n"
+                    f"Host: {device_ip}\r\n"
+                    f"Content-Length: {str(len(body))}\r\n"
+                    "\r\n"
                 ).encode()
-                _LOG.debug("Writing message to " + device_ip + body.decode())
+                _LOG.debug("Writing message to %s", device_ip)
                 transport.write(header + body)
-                # pylint: disable=attribute-defined-outside-init
-                self.transport = transport
 
             def data_received(self, data):
-                response.append(data.decode())
+                self.response += data
 
             def eof_received(self):
-                self.transport.close()
-                lines = "".join(response).split("\r\n")
-                if not lines:
+                full = self.response.decode("latin_1")
+                if not full:
+                    on_complete.set_exception(RuntimeError("Empty HTTP Response"))
                     return
-                parts = lines[0].split(" ")
-                if len(parts) != 3:
+                header, _ = full.split("\r\n", 1)
+                parts = header.split(" ", 2)
+                if len(parts) < 3 or parts[0] != "HTTP/1.1":
+                    on_complete.set_exception(RuntimeError("Invalid HTTP Response"))
                     return
-                if int(parts[1]) != 200:
+                if parts[1] != "200":
                     on_complete.set_exception(
-                        aiohttp.ClientResponseError(
-                            None, None, status=int(parts[1]), message=parts[2]
+                        aiohttp.ClientError(
+                            f"Unable to connect to: http://{device_ip}/{command}"
+                            f" response={parts[1]} message={parts[2]}"
                         )
                     )
-                elif len(lines) > 2 and len(lines[-2]) == 0:
-                    on_complete.set_result(lines[-1])
-                else:
-                    on_complete.set_result(None)
+                    return
+                _, content = full.split("\r\n\r\n", 1)
+                on_complete.set_result(content)
 
         # The server doesn't tolerate multiple requests in fly concurrently
         try:
-            async with self._sending_lock, timeout(Controller.REQUEST_TIMEOUT) as timer:
-                # pylint: disable=unnecessary-lambda
-                transport, _ = await loop.create_connection(  # type: ignore  # noqa: E501
-                    lambda: _PostProtocol(), self.device_ip, 80
-                )
-
-                # wait for response to be recieved.
+            async with self._sending_lock, timeout(Controller.REQUEST_TIMEOUT):
+                await loop.create_connection(_PostProtocol, self.device_ip, 80)
                 await on_complete
 
-            if timer.expired:
-                if transport:
-                    transport.close()
-                raise asyncio.TimeoutError()
-
-            return on_complete.result()
-
+            result = on_complete.result()
         except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to controller") from ex
+
+        if len(result) >= 7 and result[:6] == "{ERROR":
+            raise ConnectionError(f"Server returned error state {result}")
+        if len(result) >= 4 and result[-4:] == "{OK}":
+            result = result[:-4]
+        return result

@@ -179,6 +179,6 @@ class Zone:
         return self._zone_data[state]
 
     async def _send_command(self, command, data: Union[str, float, int]):
-        send_data = {"ZoneNo": str(self._index + 1), "Command": str(data)}
+        send_data = {command:{"ZoneNo": str(self._index + 1), "Command": str(data)}}
         # pylint: disable=protected-access
         await self._controller._send_command_async(command, send_data)

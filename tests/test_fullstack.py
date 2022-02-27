@@ -177,4 +177,10 @@ async def test_power():
 
         result = ctrl.power
 
+        result = await ctrl._send_command_async(
+            "iZoneRequestV2", {"iZoneV2Request":{"Type": 2, "No": 0, "No1": 0}}
+        )
+        import json
+        result = json.loads(result)
+
         dump_data(ctrl)
