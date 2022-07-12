@@ -54,6 +54,7 @@ class Controller:
     _VALID_FAN_MODES = {
         "disabled": [Fan.LOW, Fan.MED, Fan.HIGH],
         "unknown": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
+        '4-speed': [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
         "3-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         "2-speed": [Fan.LOW, Fan.HIGH, Fan.AUTO],
         "var-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
