@@ -1,6 +1,0 @@
-aiohttp>3.4
-netifaces
-async_timeout
-pytest
-pytest-aiohttp
-pytest-asyncio
