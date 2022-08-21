@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional, Union
 import aiohttp
 from async_timeout import timeout
 
-from .power import Power
-from .zone import Zone
+from . import Power
+from . import Zone
 
 _LOG = logging.getLogger("pizone.controller")
 
@@ -54,7 +54,7 @@ class Controller:
     _VALID_FAN_MODES = {
         "disabled": [Fan.LOW, Fan.MED, Fan.HIGH],
         "unknown": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
-        '4-speed': [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
+        "4-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.TOP, Fan.AUTO],
         "3-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
         "2-speed": [Fan.LOW, Fan.HIGH, Fan.AUTO],
         "var-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
@@ -221,7 +221,7 @@ class Controller:
             AttributeError: On setting if the argument value is not valid
         """
         if value not in self.fan_modes:
-            raise AttributeError("Fan mode {} not allowed".format(value.value))
+            raise AttributeError(f"Fan mode {value.value} not allowed")
         await self._set_system_state(
             "SysFan",
             "SystemFAN",
@@ -243,7 +243,7 @@ class Controller:
         time = int(value)
         if time < 0 or time > 120 or time % 30 != 0:
             raise AttributeError(
-                'Invalid Sleep Timer "{}", must be divisible by 30'.format(value)
+                f'Invalid Sleep Timer "{value}", must be divisible by 30'
             )
         await self._set_system_state("SleepTimer", "SleepTimer", value, time)
 
@@ -292,11 +292,9 @@ class Controller:
                 Can still be set even if the mode isn't appropriate.
         """
         if value % 0.5 != 0:
-            raise AttributeError(
-                "SetPoint '{}' not rounded to nearest 0.5".format(value)
-            )
+            raise AttributeError(f"SetPoint '{value}' not rounded to nearest 0.5")
         if value < self.temp_min or value > self.temp_max:
-            raise AttributeError("SetPoint '{}' is out of range".format(value))
+            raise AttributeError(f"SetPoint '{value}' is out of range")
         await self._set_system_state("Setpoint", "UnitSetpoint", value, str(value))
 
     @property
@@ -400,9 +398,7 @@ class Controller:
 
     async def _refresh_zone_group(self, group: int, notify: bool = True):
         assert group in [0, 4, 8]
-        zone_data_part = await self._get_resource(
-            "Zones{0}_{1}".format(group + 1, group + 4)
-        )
+        zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
 
         for i in range(min(len(self.zones) - group, 4)):
             zone_data = zone_data_part[i]
@@ -474,7 +470,7 @@ class Controller:
         try:
             session = self._discovery.session
             async with self._sending_lock, session.get(
-                "http://%s/%s" % (self.device_ip, resource),
+                f"http://{self.device_ip}/{resource}",
                 timeout=Controller.REQUEST_TIMEOUT,
             ) as response:
                 try:

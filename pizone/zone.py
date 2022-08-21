@@ -98,9 +98,9 @@ class Zone:
             AttributeError if the set point is out of range
         """
         if value % 5 != 0:
-            raise AttributeError("MinAir '{}' not rounded to nearest 5".format(value))
+            raise AttributeError(f"MinAir '{value}' not rounded to nearest 5")
         if value < 0 or value > 100:
-            raise AttributeError("MinAir '{}' is out of range".format(value))
+            raise AttributeError(f"MinAir '{value}' is out of range")
 
         await self._send_command("AirMinCommand", value)
         self._zone_data["MinAir"] = value
@@ -114,9 +114,9 @@ class Zone:
             AttributeError if the set point is out of range
         """
         if value % 5 != 0:
-            raise AttributeError("MaxAir '{}' not rounded to nearest 5".format(value))
+            raise AttributeError(f"MaxAir '{value}' not rounded to nearest 5")
         if value < 0 or value > 100:
-            raise AttributeError("MaxAir '{}' is out of range".format(value))
+            raise AttributeError(f"MaxAir '{value}' is out of range")
 
         await self._send_command("AirMaxCommand", value)
         self._zone_data["MaxAir"] = value
@@ -131,15 +131,11 @@ class Zone:
             AttributeError if the set point is out of range
         """
         if self.type != Zone.Type.AUTO:
-            raise AttributeError(
-                "Can't set SetPoint to '{}' type zone.".format(self.type)
-            )
+            raise AttributeError(f"Can't set SetPoint to '{self.type}' type zone.")
         if value % 0.5 != 0:
-            raise AttributeError(
-                "SetPoint '{}' not rounded to nearest 0.5".format(value)
-            )
+            raise AttributeError(f"SetPoint '{value}' not rounded to nearest 0.5")
         if value < self._controller.temp_min or value > self._controller.temp_max:
-            raise AttributeError("SetPoint '{}' is out of range".format(value))
+            raise AttributeError(f"SetPoint '{value}' is out of range")
 
         await self._send_command("ZoneCommand", value)
         self._zone_data["Mode"] = "auto"
@@ -179,6 +175,6 @@ class Zone:
         return self._zone_data[state]
 
     async def _send_command(self, command, data: Union[str, float, int]):
-        send_data = {command:{"ZoneNo": str(self._index + 1), "Command": str(data)}}
+        send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}
         # pylint: disable=protected-access
         await self._controller._send_command_async(command, send_data)

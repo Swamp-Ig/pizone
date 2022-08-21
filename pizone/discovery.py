@@ -368,18 +368,16 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
             pass
         elif data == CHANGED_SYSTEM:
             ctrl = self._find_by_addr(addr)
-            if not ctrl:
-                return
-            # pylint: disable=protected-access
-            return self.create_task(self._wrap_update(ctrl._refresh_system()))
+            if ctrl:
+                # pylint: disable=protected-access
+                self.create_task(self._wrap_update(ctrl._refresh_system()))
         elif data == CHANGED_ZONES:
             ctrl = self._find_by_addr(addr)
-            if not ctrl:
-                return
-            # pylint: disable=protected-access
-            return self.create_task(self._wrap_update(ctrl._refresh_zones()))
+            if ctrl:
+                # pylint: disable=protected-access
+                self.create_task(self._wrap_update(ctrl._refresh_zones()))
         else:
-            return self._discovery_recieved(data)
+            self._discovery_recieved(data)
 
     def _discovery_recieved(self, data):
         message = data.decode().split(",")
@@ -420,7 +418,7 @@ class _DiscoveryServiceImpl(DiscoveryService, DatagramProtocol, Listener):
                 self._controllers[device_uid] = controller
                 self.controller_discovered(controller)
 
-            return self.create_task(initialize_controller())
+            self.create_task(initialize_controller())
         else:
             controller = self._controllers[device_uid]
             controller._refresh_address(device_ip)
