@@ -14,7 +14,7 @@ from asyncio import (
 from logging import Logger
 from typing import Dict, List, Optional, Set
 
-import netifaces
+import netifaces # type: ignore
 from aiohttp import ClientSession
 from async_timeout import timeout
 
