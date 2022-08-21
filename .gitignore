@@ -270,3 +270,6 @@ __pycache__/
 /.coverage
 /htmlcov
 .eggs
+
+# Generated content
+pizone/version.py
