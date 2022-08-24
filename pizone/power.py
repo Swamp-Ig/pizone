@@ -11,6 +11,7 @@ import logging
 from enum import IntEnum, unique
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+
 _LOG = logging.getLogger("pizone.power")
 
 
@@ -172,10 +173,7 @@ class Power:
 
     def __init__(self, controller) -> None:
         """Init function."""
-        # pylint: disable=import-outside-toplevel, unused-import
-        from .controller import Controller
-
-        self._controller = controller  # type: Controller
+        self._controller = controller  # type: ignore
         self._config = {}  # type: Dict[str, Any]
         self._status = {"LastReadingNo": -1}  # type: Dict[str, Any]
         self._devices = tuple(PowerDevice(self, i) for i in range(0, 5))

@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional, Union
 import aiohttp
 from async_timeout import timeout
 
-from . import Power
-from . import Zone
+from .power import Power
+from .zone import Zone
 
 _LOG = logging.getLogger("pizone.controller")
 
