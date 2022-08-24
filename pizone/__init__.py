@@ -3,10 +3,8 @@
 Interaction mostly through the Controller and Zone classes.
 """
 
-from .controller import Controller
-from .discovery import DiscoveryService, Listener, discovery
+from .discovery import DiscoveryService, Listener, discovery, Controller, Zone
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
-from .zone import Zone
 
 __ALL__ = [
     Controller,
