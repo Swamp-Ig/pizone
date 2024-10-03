@@ -24,15 +24,30 @@ class Zone:
         CONST = "const"
 
     class Mode(Enum):
-        """This indicates the current mode the zone is in. Possible values are:
-        'open' – the zone is currently open
-        'close' – the zone is currently closed
-        'auto' – the zone is currently in temperature control mode
+        """
+        This indicates the current mode the zone is in.
         """
 
         OPEN = "open"
+        """
+        Zone is currently open
+        """
         CLOSE = "close"
+        """
+        Zone is currently closed
+        """
         AUTO = "auto"
+        """
+        Zone is currently in temperature control mode
+        """
+        ERROR = "error"
+        """
+        Zone is in an error state.
+
+        This is not a valid mode to set, but may be returned by the controller.
+        Note that this is not formally documented by iZone, but is observed in
+        the wild.
+        """
 
     DictValue = Union[str, int, float]
     ZoneData = Dict[str, DictValue]
