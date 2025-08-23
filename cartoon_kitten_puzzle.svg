@@ -1,73 +1,71 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
   <!-- Background -->
-  <rect width="800" height="600" fill="#f0f8ff"/>
+  <rect width="800" height="600" fill="white"/>
   
   <!-- Floor -->
-  <rect x="0" y="450" width="800" height="150" fill="#8b4513" rx="5"/>
-  <rect x="0" y="450" width="800" height="10" fill="#654321"/>
+  <rect x="0" y="450" width="800" height="150" fill="white" stroke="black" stroke-width="2" rx="5"/>
+  <rect x="0" y="450" width="800" height="10" fill="white" stroke="black" stroke-width="1"/>
   
   <!-- Table -->
-  <rect x="200" y="350" width="400" height="20" fill="#d2691e" rx="10"/>
+  <rect x="200" y="350" width="400" height="20" fill="white" stroke="black" stroke-width="2" rx="10"/>
   <!-- Table legs -->
-  <rect x="220" y="370" width="15" height="80" fill="#8b4513"/>
-  <rect x="565" y="370" width="15" height="80" fill="#8b4513"/>
-  <rect x="220" y="370" width="15" height="80" fill="#a0522d"/>
-  <rect x="565" y="370" width="15" height="80" fill="#a0522d"/>
+  <rect x="220" y="370" width="15" height="80" fill="white" stroke="black" stroke-width="2"/>
+  <rect x="565" y="370" width="15" height="80" fill="white" stroke="black" stroke-width="2"/>
   
   <!-- Jigsaw puzzle pieces on table -->
   <g id="puzzle-piece-1" transform="translate(280,310)">
-    <path d="M0,0 L40,0 C40,0 45,-10 50,0 L50,0 L90,0 L90,10 C90,10 100,15 90,20 L90,40 L50,40 L50,40 C50,40 45,50 40,40 L0,40 L0,20 C0,20 -10,15 0,10 Z" fill="#ff6b6b"/>
-    <path d="M10,10 L30,10 L30,30 L10,30 Z" fill="#ff4757" opacity="0.7"/>
+    <path d="M0,0 L40,0 C40,0 45,-10 50,0 L50,0 L90,0 L90,10 C90,10 100,15 90,20 L90,40 L50,40 L50,40 C50,40 45,50 40,40 L0,40 L0,20 C0,20 -10,15 0,10 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M10,10 L30,10 L30,30 L10,30 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <g id="puzzle-piece-2" transform="translate(390,320)">
-    <path d="M0,0 L40,0 L40,10 C40,10 50,5 40,20 L40,40 L20,40 C20,40 15,50 10,40 L0,40 L0,20 C0,20 -10,25 0,10 Z" fill="#4ecdc4"/>
-    <path d="M5,5 L35,5 L35,35 L5,35 Z" fill="#26de81" opacity="0.7"/>
+    <path d="M0,0 L40,0 L40,10 C40,10 50,5 40,20 L40,40 L20,40 C20,40 15,50 10,40 L0,40 L0,20 C0,20 -10,25 0,10 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M5,5 L35,5 L35,35 L5,35 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <g id="puzzle-piece-3" transform="translate(500,315)">
-    <path d="M0,0 L40,0 C40,0 45,-10 50,0 L80,0 L80,20 C80,20 90,15 80,30 L80,40 L40,40 L40,40 C40,40 35,50 30,40 L0,40 Z" fill="#ffa726"/>
-    <path d="M10,10 L70,10 L70,30 L10,30 Z" fill="#ff9800" opacity="0.7"/>
+    <path d="M0,0 L40,0 C40,0 45,-10 50,0 L80,0 L80,20 C80,20 90,15 80,30 L80,40 L40,40 L40,40 C40,40 35,50 30,40 L0,40 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M10,10 L70,10 L70,30 L10,30 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <!-- Falling puzzle pieces -->
   <g id="falling-piece-1" transform="translate(150,400) rotate(25)">
-    <path d="M0,0 L30,0 C30,0 35,-8 40,0 L60,0 L60,15 C60,15 70,10 60,25 L60,30 L30,30 L30,30 C30,30 25,40 20,30 L0,30 Z" fill="#a29bfe"/>
-    <path d="M5,5 L55,5 L55,25 L5,25 Z" fill="#6c5ce7" opacity="0.7"/>
+    <path d="M0,0 L30,0 C30,0 35,-8 40,0 L60,0 L60,15 C60,15 70,10 60,25 L60,30 L30,30 L30,30 C30,30 25,40 20,30 L0,30 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M5,5 L55,5 L55,25 L5,25 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <g id="falling-piece-2" transform="translate(680,420) rotate(-15)">
-    <path d="M0,0 L35,0 L35,8 C35,8 45,3 35,18 L35,30 L15,30 C15,30 10,40 5,30 L0,30 L0,15 C0,15 -10,20 0,8 Z" fill="#fd79a8"/>
-    <path d="M5,5 L30,5 L30,25 L5,25 Z" fill="#e84393" opacity="0.7"/>
+    <path d="M0,0 L35,0 L35,8 C35,8 45,3 35,18 L35,30 L15,30 C15,30 10,40 5,30 L0,30 L0,15 C0,15 -10,20 0,8 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M5,5 L30,5 L30,25 L5,25 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <g id="falling-piece-3" transform="translate(120,480) rotate(45)">
-    <path d="M0,0 L25,0 C25,0 30,-6 35,0 L50,0 L50,12 C50,12 60,7 50,20 L50,25 L25,25 L25,25 C25,25 20,35 15,25 L0,25 Z" fill="#55a3ff"/>
-    <path d="M5,5 L45,5 L45,20 L5,20 Z" fill="#0984e3" opacity="0.7"/>
+    <path d="M0,0 L25,0 C25,0 30,-6 35,0 L50,0 L50,12 C50,12 60,7 50,20 L50,25 L25,25 L25,25 C25,25 20,35 15,25 L0,25 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M5,5 L45,5 L45,20 L5,20 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <!-- Kitten body -->
-  <ellipse cx="450" cy="280" rx="45" ry="35" fill="#ffa500"/>
+  <ellipse cx="450" cy="280" rx="45" ry="35" fill="white" stroke="black" stroke-width="2"/>
   
   <!-- Kitten head -->
-  <circle cx="420" cy="240" r="35" fill="#ffa500"/>
+  <circle cx="420" cy="240" r="35" fill="white" stroke="black" stroke-width="2"/>
   
   <!-- Kitten ears -->
-  <ellipse cx="405" cy="215" rx="12" ry="18" fill="#ffa500" transform="rotate(-20 405 215)"/>
-  <ellipse cx="435" cy="215" rx="12" ry="18" fill="#ffa500" transform="rotate(20 435 215)"/>
-  <ellipse cx="405" cy="218" rx="8" ry="12" fill="#ff69b4" transform="rotate(-20 405 218)"/>
-  <ellipse cx="435" cy="218" rx="8" ry="12" fill="#ff69b4" transform="rotate(20 435 218)"/>
+  <ellipse cx="405" cy="215" rx="12" ry="18" fill="white" stroke="black" stroke-width="2" transform="rotate(-20 405 215)"/>
+  <ellipse cx="435" cy="215" rx="12" ry="18" fill="white" stroke="black" stroke-width="2" transform="rotate(20 435 215)"/>
+  <ellipse cx="405" cy="218" rx="8" ry="12" fill="white" stroke="black" stroke-width="1" transform="rotate(-20 405 218)"/>
+  <ellipse cx="435" cy="218" rx="8" ry="12" fill="white" stroke="black" stroke-width="1" transform="rotate(20 435 218)"/>
   
   <!-- Kitten face -->
   <!-- Eyes -->
-  <ellipse cx="410" cy="235" rx="8" ry="10" fill="#000"/>
-  <ellipse cx="430" cy="235" rx="8" ry="10" fill="#000"/>
+  <ellipse cx="410" cy="235" rx="8" ry="10" fill="black"/>
+  <ellipse cx="430" cy="235" rx="8" ry="10" fill="black"/>
   <ellipse cx="412" cy="232" rx="3" ry="4" fill="#fff"/>
   <ellipse cx="432" cy="232" rx="3" ry="4" fill="#fff"/>
   
   <!-- Nose -->
-  <path d="M420,245 L415,250 L425,250 Z" fill="#ff69b4"/>
+  <path d="M420,245 L415,250 L425,250 Z" fill="black"/>
   
   <!-- Mouth -->
   <path d="M420,250 Q415,255 410,252" stroke="#000" stroke-width="2" fill="none"/>
@@ -80,39 +78,39 @@
   <line x1="435" y1="248" x2="450" y2="250" stroke="#000" stroke-width="1.5"/>
   
   <!-- Kitten front paws -->
-  <ellipse cx="420" cy="300" rx="8" ry="15" fill="#ffa500"/>
-  <ellipse cx="440" cy="305" rx="8" ry="15" fill="#ffa500"/>
+  <ellipse cx="420" cy="300" rx="8" ry="15" fill="white" stroke="black" stroke-width="2"/>
+  <ellipse cx="440" cy="305" rx="8" ry="15" fill="white" stroke="black" stroke-width="2"/>
   
   <!-- Kitten pushing paw (in action) -->
-  <ellipse cx="480" cy="285" rx="10" ry="18" fill="#ffa500" transform="rotate(30 480 285)"/>
-  <circle cx="485" cy="290" r="4" fill="#ff69b4"/>
+  <ellipse cx="480" cy="285" rx="10" ry="18" fill="white" stroke="black" stroke-width="2" transform="rotate(30 480 285)"/>
+  <circle cx="485" cy="290" r="4" fill="black"/>
   
   <!-- Motion lines showing pushing action -->
-  <line x1="495" y1="280" x2="520" y2="275" stroke="#ff6b6b" stroke-width="3" opacity="0.7"/>
-  <line x1="495" y1="285" x2="525" y2="280" stroke="#ff6b6b" stroke-width="3" opacity="0.7"/>
-  <line x1="495" y1="290" x2="530" y2="285" stroke="#ff6b6b" stroke-width="3" opacity="0.7"/>
+  <line x1="495" y1="280" x2="520" y2="275" stroke="black" stroke-width="2"/>
+  <line x1="495" y1="285" x2="525" y2="280" stroke="black" stroke-width="2"/>
+  <line x1="495" y1="290" x2="530" y2="285" stroke="black" stroke-width="2"/>
   
   <!-- Kitten back legs -->
-  <ellipse cx="460" cy="310" rx="10" ry="18" fill="#ffa500"/>
-  <ellipse cx="480" cy="315" rx="10" ry="18" fill="#ffa500"/>
+  <ellipse cx="460" cy="310" rx="10" ry="18" fill="white" stroke="black" stroke-width="2"/>
+  <ellipse cx="480" cy="315" rx="10" ry="18" fill="white" stroke="black" stroke-width="2"/>
   
   <!-- Kitten tail -->
-  <path d="M490,270 Q520,250 530,220 Q535,200 520,190" stroke="#ffa500" stroke-width="15" fill="none" stroke-linecap="round"/>
+  <path d="M490,270 Q520,250 530,220 Q535,200 520,190" stroke="black" stroke-width="3" fill="none" stroke-linecap="round"/>
   
   <!-- Stripes on kitten -->
-  <ellipse cx="440" cy="225" rx="25" ry="3" fill="#ff8c00" opacity="0.6" transform="rotate(10 440 225)"/>
-  <ellipse cx="435" cy="260" rx="30" ry="4" fill="#ff8c00" opacity="0.6" transform="rotate(-5 435 260)"/>
-  <ellipse cx="450" cy="290" rx="35" ry="4" fill="#ff8c00" opacity="0.6" transform="rotate(8 450 290)"/>
+  <ellipse cx="440" cy="225" rx="25" ry="3" fill="black" transform="rotate(10 440 225)"/>
+  <ellipse cx="435" cy="260" rx="30" ry="4" fill="black" transform="rotate(-5 435 260)"/>
+  <ellipse cx="450" cy="290" rx="35" ry="4" fill="black" transform="rotate(8 450 290)"/>
   
   <!-- Puzzle pieces scattered on floor -->
   <g id="floor-piece-1" transform="translate(100,520)">
-    <path d="M0,0 L30,0 C30,0 35,-8 40,0 L60,0 L60,15 C60,15 70,10 60,25 L60,30 L30,30 L30,30 C30,30 25,40 20,30 L0,30 Z" fill="#74b9ff"/>
-    <path d="M5,5 L55,5 L55,25 L5,25 Z" fill="#0984e3" opacity="0.7"/>
+    <path d="M0,0 L30,0 C30,0 35,-8 40,0 L60,0 L60,15 C60,15 70,10 60,25 L60,30 L30,30 L30,30 C30,30 25,40 20,30 L0,30 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M5,5 L55,5 L55,25 L5,25 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <g id="floor-piece-2" transform="translate(650,530) rotate(30)">
-    <path d="M0,0 L25,0 L25,8 C25,8 35,3 25,18 L25,25 L12,25 C12,25 7,35 2,25 L0,25 L0,12 C0,12 -10,17 0,8 Z" fill="#00b894"/>
-    <path d="M3,3 L22,3 L22,22 L3,22 Z" fill="#00a085" opacity="0.7"/>
+    <path d="M0,0 L25,0 L25,8 C25,8 35,3 25,18 L25,25 L12,25 C12,25 7,35 2,25 L0,25 L0,12 C0,12 -10,17 0,8 Z" fill="white" stroke="black" stroke-width="2"/>
+    <path d="M3,3 L22,3 L22,22 L3,22 Z" fill="white" stroke="black" stroke-width="1"/>
   </g>
   
   <!-- Kitten's expression indicators -->
@@ -121,7 +119,7 @@
   <path d="M425,225 Q430,220 435,225" stroke="#000" stroke-width="2" fill="none"/>
   
   <!-- Small heart floating above indicating playfulness -->
-  <path d="M380,180 C380,175 385,170 390,175 C395,170 400,175 400,180 C400,185 390,195 390,195 C390,195 380,185 380,180 Z" fill="#ff69b4" opacity="0.8"/>
+  <path d="M380,180 C380,175 385,170 390,175 C395,170 400,175 400,180 C400,185 390,195 390,195 C390,195 380,185 380,180 Z" fill="white" stroke="black" stroke-width="2"/>
   
   <!-- Title text -->
   <text x="400" y="50" text-anchor="middle" font-family="Comic Sans MS, cursive" font-size="28" font-weight="bold" fill="#2d3436">Mischievous Kitten</text>
