@@ -9,7 +9,6 @@ from json.decoder import JSONDecodeError
 from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
-from async_timeout import timeout
 
 from .power import Power
 from .zone import Zone
@@ -126,7 +125,7 @@ class Controller:
     async def _poll_loop(self) -> None:
         while True:
             try:
-                async with timeout(Controller.REFRESH_INTERVAL):
+                async with asyncio.timeout(Controller.REFRESH_INTERVAL):
                     async with self._scan_condition:
                         await self._scan_condition.wait()
                 # triggered rescan, short delay
@@ -536,7 +535,7 @@ class Controller:
 
         # The server doesn't tolerate multiple requests in fly concurrently
         try:
-            async with self._sending_lock, timeout(Controller.REQUEST_TIMEOUT):
+            async with self._sending_lock, asyncio.timeout(Controller.REQUEST_TIMEOUT):
                 await loop.create_connection(_PostProtocol, self.device_ip, 80)
                 await on_complete
 
