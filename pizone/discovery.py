@@ -142,7 +142,7 @@ class DiscoveryService:
                     ctrl.device_uid,
                     ctrl.device_ip,
                 )
-                _srv._disconnected.remove(ctrl.device_uid)
+                _srv._disconnected.discard(ctrl.device_uid)
                 for listener in _srv._listeners:
                     with LogExceptions("controller_reconnected"):
                         listener.controller_reconnected(ctrl)
