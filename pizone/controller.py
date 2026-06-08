@@ -402,18 +402,33 @@ class Controller:
     async def _refresh_zones(self, notify: bool = True) -> None:
         """Refresh the Zone information."""
         zones = int(self._system_settings["NoOfZones"])
-        await asyncio.gather(
-            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
-        )
+        # Sequential refresh of groups (0, 4, 8, 12)
+        for i in range(0, zones, 4):
+            await self._refresh_zone_group(i, notify)
 
-    async def _refresh_zone_group(self, group: int, notify: bool = True) -> None:
-        assert group in [0, 4, 8]
-        zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
+    async def _refresh_zone_group(self, group: int, notify: bool = True):
+        # We allow 12 here because for 13 zones, the loop (0, 13, 4) produces 0, 4, 8, 12
+        assert group in [0, 4, 8, 12]
+        
+        if group == 12:
+            # Fetches the pair 13 & 14, even if you only have 13
+            zone_data_part = await self._get_resource("Zones13_14")
+        else:
+            # Standard groups 1-4, 5-8, 9-12 with underscore format
+            zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
+            
+        if not zone_data_part:
+            return
 
-        for i in range(min(len(self.zones) - group, 4)):
+        num_zones_in_response = len(zone_data_part)
+
+        for i in range(num_zones_in_response):
             zone_data = zone_data_part[i]
-            # pylint: disable=protected-access
-            self.zones[i + group]._update_zone(zone_data, notify)
+            
+            # Safety check: ensure we don't write past the end of the zones list
+            if (i + group) < len(self.zones):
+                # pylint: disable=protected-access
+                self.zones[i + group]._update_zone(zone_data, notify)
 
     def _refresh_address(self, address: str) -> None:
         """Called from discovery to update the address"""
