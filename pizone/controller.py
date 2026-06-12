@@ -375,8 +375,9 @@ class Controller:
         # this has to be done sequentially
         await self._refresh_system(notify)
         await self._refresh_power(notify)
-        for i in range(0, zones, 4):
-            await self._refresh_zone_group(i, notify)
+        await asyncio.gather(
+            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
+        )
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings."""
@@ -402,33 +403,27 @@ class Controller:
     async def _refresh_zones(self, notify: bool = True) -> None:
         """Refresh the Zone information."""
         zones = int(self._system_settings["NoOfZones"])
-        # Sequential refresh of groups (0, 4, 8, 12)
-        for i in range(0, zones, 4):
-            await self._refresh_zone_group(i, notify)
+        await asyncio.gather(
+            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
+        )
 
-    async def _refresh_zone_group(self, group: int, notify: bool = True):
-        # We allow 12 here because for 13 zones, the loop (0, 13, 4) produces 0, 4, 8, 12
+    async def _refresh_zone_group(self, group: int, notify: bool = True) -> None:
         assert group in [0, 4, 8, 12]
         
-        if group == 12:
-            # Fetches the pair 13 & 14, even if you only have 13
+        if group >= 12:
             zone_data_part = await self._get_resource("Zones13_14")
+            max_chunk = 2
         else:
-            # Standard groups 1-4, 5-8, 9-12 with underscore format
             zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
+            max_chunk = 4
             
         if not zone_data_part:
             return
 
-        num_zones_in_response = len(zone_data_part)
-
-        for i in range(num_zones_in_response):
+        for i in range(min(len(self.zones) - group, len(zone_data_part), max_chunk)):
             zone_data = zone_data_part[i]
-            
-            # Safety check: ensure we don't write past the end of the zones list
-            if (i + group) < len(self.zones):
-                # pylint: disable=protected-access
-                self.zones[i + group]._update_zone(zone_data, notify)
+            # pylint: disable=protected-access
+            self.zones[i + group]._update_zone(zone_data, notify)
 
     def _refresh_address(self, address: str) -> None:
         """Called from discovery to update the address"""
