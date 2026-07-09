@@ -46,7 +46,7 @@ class Controller:
     DictValue = Union[str, int, float]
     ControllerData = Dict[str, DictValue]
 
-    REQUEST_TIMEOUT = 3
+    REQUEST_TIMEOUT = 10
     """Time to wait for results from server."""
 
     REFRESH_INTERVAL = 25.0
@@ -73,6 +73,7 @@ class Controller:
         device_ip: str,
         is_v2: bool,
         is_ipower: bool,
+        request_timeout: float | None = None,
     ) -> None:
         """Create a controller interface.
 
@@ -99,6 +100,7 @@ class Controller:
         self._device_uid = device_uid
         self._is_v2 = is_v2
         self._is_ipower = is_ipower
+        self._request_timeout = request_timeout or Controller.REQUEST_TIMEOUT
 
         self.zones: list[Zone] = []
         self.fan_modes: list[Controller.Fan] = []
@@ -125,9 +127,20 @@ class Controller:
         await self._refresh_zones(notify=False)
 
         if self._is_ipower:
-            self._power = Power(self)
-            await self._power.init()
-            if self._power.enabled:
+            power = Power(self)
+            try:
+                await power.init()
+            except ConnectionError:
+                _LOG.warning(
+                    "Power monitor unavailable for uid=%s ip=%s; "
+                    "continuing without power data",
+                    self.device_uid,
+                    self.device_ip,
+                    exc_info=True,
+                )
+            else:
+                self._power = power
+            if self._power is not None and self._power.enabled:
                 await self._refresh_power(notify=False)
         else:
             self._power = None
@@ -394,7 +407,18 @@ class Controller:
         if self._power is None or not self._power.enabled:
             return
 
-        updated = await self._power.refresh()
+        try:
+            updated = await self._power.refresh()
+        except ConnectionError:
+            _LOG.warning(
+                "Power monitor refresh failed for uid=%s ip=%s; "
+                "disabling optional power polling",
+                self.device_uid,
+                self.device_ip,
+                exc_info=True,
+            )
+            self._power = None
+            return
 
         if updated and notify:
             self._event_coordinator.power_update(self)
@@ -402,9 +426,8 @@ class Controller:
     async def _refresh_zones(self, notify: bool = True) -> None:
         """Refresh the Zone information."""
         zones = int(self._system_settings["NoOfZones"])
-        await asyncio.gather(
-            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
-        )
+        for i in range(0, zones, 4):
+            await self._refresh_zone_group(i, notify)
 
     async def _refresh_zone_group(self, group: int, notify: bool = True) -> None:
         assert group in [0, 4, 8]
@@ -489,7 +512,7 @@ class Controller:
                 self._sending_lock,
                 session.get(
                     f"http://{self.device_ip}/{resource}",
-                    timeout=Controller.REQUEST_TIMEOUT,
+                    timeout=self._request_timeout,
                 ) as response,
             ):
                 try:
@@ -506,7 +529,9 @@ class Controller:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
 
-    async def _send_command_async(self, command: str, data: Any) -> str:
+    async def _send_command_async(
+        self, command: str, data: Any, *, mark_failed: bool = True
+    ) -> str:
         # For some reason aiohttp fragments post requests, which causes
         # the server to fail disgracefully. Implemented rough and dirty
         # HTTP POST client.
@@ -555,13 +580,14 @@ class Controller:
 
         # The server doesn't tolerate multiple requests in fly concurrently
         try:
-            async with self._sending_lock, asyncio.timeout(Controller.REQUEST_TIMEOUT):
+            async with self._sending_lock, asyncio.timeout(self._request_timeout):
                 await loop.create_connection(_PostProtocol, self.device_ip, 80)
                 await on_complete
 
             result = on_complete.result()
         except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
-            self._failed_connection(ex)
+            if mark_failed:
+                self._failed_connection(ex)
             raise ConnectionError("Unable to connect to controller") from ex
 
         if len(result) >= 7 and result[:6] == "{ERROR":

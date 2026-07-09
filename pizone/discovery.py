@@ -86,7 +86,11 @@ class Listener:
 class DiscoveryService:
     """Discovery service: manages controller registry, listener fanout, and UDP scanning."""
 
-    def __init__(self, session: ClientSession | None = None) -> None:
+    def __init__(
+        self,
+        session: ClientSession | None = None,
+        request_timeout: float | None = None,
+    ) -> None:
         """Start the discovery protocol using the supplied loop.
 
         raises:
@@ -101,6 +105,7 @@ class DiscoveryService:
         _LOG.info("Starting discovery protocol")
         self._session = session
         self._own_session = session is None
+        self._request_timeout = request_timeout
 
         self._transport: DatagramTransport | None = None
 
@@ -464,17 +469,20 @@ class DiscoveryService:
             device_ip=device_ip,
             is_v2=is_v2,
             is_ipower=is_ipower,
+            request_timeout=self._request_timeout,
         )
 
 
 def discovery(
-    *listeners: Listener, session: ClientSession | None = None
+    *listeners: Listener,
+    session: ClientSession | None = None,
+    request_timeout: float | None = None,
 ) -> DiscoveryService:
     """Create discovery service. Returned object is a asynchronous
     context manager so can be used with 'async with' statement.
     Alternately call start_discovery or start_discovery_async to commence
     the discovery process."""
-    service = DiscoveryService(session=session)
+    service = DiscoveryService(session=session, request_timeout=request_timeout)
     for listener in listeners:
         service.add_listener(listener)
     return service

@@ -89,6 +89,112 @@ async def test_discovery(service):
 
 
 @pytest.mark.asyncio
+async def test_custom_request_timeout(service):
+    controller = service._controllers["000000001"]  # type: Controller
+
+    assert controller._request_timeout == Controller.REQUEST_TIMEOUT
+
+    service = DiscoveryService(request_timeout=20)
+    controller = service._create_controller("000000001", "8.8.8.8", False, False)
+
+    assert controller._request_timeout == 20
+
+
+@pytest.mark.asyncio
+async def test_zone_refresh_is_sequential(service, monkeypatch):
+    controller = service._controllers["000000001"]  # type: Controller
+    calls = []
+
+    async def refresh_zone_group(group: int, notify: bool = True):
+        calls.append(("start", group, notify))
+        await sleep(0)
+        calls.append(("end", group, notify))
+
+    monkeypatch.setattr(controller, "_refresh_zone_group", refresh_zone_group)
+
+    await controller._refresh_zones()
+
+    assert calls == [
+        ("start", 0, True),
+        ("end", 0, True),
+        ("start", 4, True),
+        ("end", 4, True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ipower_init_failure_is_nonfatal(monkeypatch):
+    from .conftest import MockDiscoveryService, _register_mock_service
+
+    class FailingPower:
+        def __init__(self, _controller) -> None:
+            pass
+
+        async def init(self) -> None:
+            raise ConnectionError("PowerRequest timed out")
+
+    monkeypatch.setattr("pizone.controller.Power", FailingPower)
+
+    service = MockDiscoveryService()
+    try:
+        await _register_mock_service(
+            service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iPower"
+        )
+
+        controller = service._controllers["000000001"]  # type: Controller
+
+        assert controller.connected
+        assert controller.power is None
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_ipower_refresh_failure_is_nonfatal(service):
+    controller = service._controllers["000000001"]  # type: Controller
+
+    class FailingPower:
+        enabled = True
+
+        async def refresh(self) -> bool:
+            raise ConnectionError("PowerRequest timed out")
+
+    controller._power = FailingPower()
+
+    await controller._refresh_power()
+
+    assert controller.connected
+    assert controller.power is None
+
+
+@pytest.mark.asyncio
+async def test_power_request_uses_nonfatal_send_path():
+    from pizone.power import Power
+
+    class FakeController:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def _send_command_async(self, command, data, *, mark_failed=True):
+            self.calls.append((command, data, mark_failed))
+            raise ConnectionError("PowerRequest timed out")
+
+    controller = FakeController()
+    power = Power(controller)
+
+    with raises(ConnectionError):
+        await power._do_request(1, "PowerMonitorConfig")
+
+    assert controller.calls == [
+        (
+            "PowerRequest",
+            {"PowerRequest": {"Type": 1, "No": 0, "No1": 0}},
+            False,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_legacy_discovery(legacy_service):
     service = legacy_service
 

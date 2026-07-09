@@ -201,7 +201,9 @@ class Power:
     async def _do_request(self, req_type: int, result: str) -> Dict[str, Any]:
         # pylint: disable=protected-access
         datas = await self._controller._send_command_async(
-            "PowerRequest", {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}}
+            "PowerRequest",
+            {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}},
+            mark_failed=False,
         )
         data = json.loads(datas)
         return data[result]
