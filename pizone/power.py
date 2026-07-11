@@ -168,10 +168,18 @@ class PowerGroup:
 
 
 class Power:
-    """Contains power information."""
+    """Power monitor data for an iZone controller.
+
+    **Reading state:** properties return cached configuration and status data.
+    They do not perform I/O.
+
+    **Updating state:** :meth:`init` and :meth:`refresh` perform HTTP I/O via
+    the parent :class:`~pizone.controller.Controller` and raise
+    :exc:`ConnectionError` on failure.
+    """
 
     def __init__(self, controller: Any) -> None:
-        """Init function."""
+        """Create a power monitor interface for *controller*."""
         self._controller = controller
         self._config: Dict[str, Any] = {}
         self._status: Dict[str, Any] = {"LastReadingNo": -1}
@@ -179,7 +187,13 @@ class Power:
         self._groups: Tuple[PowerGroup, ...] | None = None
 
     async def init(self) -> None:
-        """Initialise the power settings."""
+        """Load power monitor configuration from the device.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+            json.JSONDecodeError: If the device response is not valid JSON.
+            KeyError: If the response is missing required fields.
+        """
         self._config = await self._do_request(1, "PowerMonitorConfig")
         gdict: Dict[int, List[PowerChannel]] = {}
         for dev in self.devices:
@@ -189,7 +203,16 @@ class Power:
         self._groups = tuple(PowerGroup(self, gl) for gl in gdict.values())
 
     async def refresh(self) -> bool:
-        """Refreshes the power usage data."""
+        """Refresh power usage data from the device.
+
+        Returns:
+            ``True`` if the cached status changed, otherwise ``False``.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+            json.JSONDecodeError: If the device response is not valid JSON.
+            KeyError: If the response is missing required fields.
+        """
         status: Dict[str, Any] = await self._do_request(2, "PowerMonitorStatus")
 
         if status["LastReadingNo"] == self._status["LastReadingNo"]:
@@ -199,6 +222,13 @@ class Power:
         return True
 
     async def _do_request(self, req_type: int, result: str) -> Dict[str, Any]:
+        """Send a power monitor request to the device.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+            json.JSONDecodeError: If the device response is not valid JSON.
+            KeyError: If the response is missing *result*.
+        """
         # pylint: disable=protected-access
         datas = await self._controller._send_command_async(
             "PowerRequest", {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}}

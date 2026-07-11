@@ -22,7 +22,19 @@ _LOG = logging.getLogger("pizone.controller")
 
 
 class Controller:
-    """Interface to IZone controller"""
+    """Interface to an iZone controller.
+
+    **Reading state:** properties and other synchronous accessors return the
+    last cached values from the device. They do not perform I/O and do not
+    raise :exc:`ConnectionError` when :attr:`connected` is ``False``. Check
+    :attr:`connected` before trusting stale data.
+
+    **Updating state:** async command and refresh methods perform HTTP I/O.
+    They raise :exc:`ConnectionError` when the device cannot be reached or
+    returns an invalid response. A successful request clears a prior
+    connection failure and notifies listeners via
+    :meth:`~pizone.discovery.Listener.controller_reconnected`.
+    """
 
     class Mode(Enum):
         """Valid controller modes"""
@@ -110,8 +122,12 @@ class Controller:
         self._scan_condition = Condition()
 
     async def _initialize(self) -> None:
-        """Initialize the controller, does not complete until the system is
-        initialized."""
+        """Load system, zone, and optional power data from the device.
+
+        Raises:
+            ConnectionError: If any initial HTTP request fails.
+            KeyError: If a required field is missing from a device response.
+        """
         await self._refresh_system(notify=False)
 
         self.fan_modes = Controller._VALID_FAN_MODES[
@@ -157,7 +173,11 @@ class Controller:
                 _LOG.error("Unexpected exception", exc_info=True)
 
     async def refresh(self) -> None:
-        """Queue a refresh of all controller data."""
+        """Schedule a refresh of all controller data on the poll loop.
+
+        Does not perform I/O directly and does not raise. Refresh failures
+        are logged by the poll loop.
+        """
         async with self._scan_condition:
             self._scan_condition.notify()
 
@@ -197,18 +217,31 @@ class Controller:
         return self._get_system_state("SysOn") == "on"
 
     async def set_on(self, value: bool) -> None:
-        """Turn the system on or off."""
+        """Turn the system on or off.
+
+        Raises:
+            ConnectionError: If the device cannot be reached or the response is invalid.
+        """
         await self._set_system_state("SysOn", "SystemON", "on" if value else "off")
 
     @property
     def mode(self) -> "Mode":
-        """System mode, cooling, heating, etc"""
+        """System mode, cooling, heating, etc.
+
+        Raises:
+            ValueError: If the cached mode is not a valid :class:`Mode` member.
+        """
         if self.free_air:
             return self.Mode.FREE_AIR
         return self.Mode(self._get_system_state("SysMode"))
 
     async def set_mode(self, value: Mode) -> None:
-        """Set system mode, cooling, heating, etc."""
+        """Set system mode, cooling, heating, etc.
+
+        Raises:
+            AttributeError: If free air mode is requested but not enabled.
+            ConnectionError: If the device cannot be reached or the response is invalid.
+        """
         if value == Controller.Mode.FREE_AIR:
             if self.free_air:
                 return
@@ -222,13 +255,21 @@ class Controller:
 
     @property
     def fan(self) -> "Fan":
-        """The current fan level."""
+        """The current fan level.
+
+        Raises:
+            ValueError: If the cached fan mode is not a valid :class:`Fan` member.
+        """
         return self.Fan(self._get_system_state("SysFan"))
 
     async def set_fan(self, value: Fan) -> None:
-        """The fan level. Not all fan modes are allowed depending on the system.
+        """Set the fan level.
+
+        Not all fan modes are allowed depending on the system configuration.
+
         Raises:
-            AttributeError: On setting if the argument value is not valid
+            AttributeError: If the requested fan mode is not allowed.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if value not in self.fan_modes:
             raise AttributeError(f"Fan mode {value.value} not allowed")
@@ -241,14 +282,21 @@ class Controller:
 
     @property
     def sleep_timer(self) -> int:
-        """Current setting for the sleep timer."""
+        """Current setting for the sleep timer.
+
+        Raises:
+            TypeError: If the cached value is missing or not numeric.
+        """
         return int(self._get_system_state("SleepTimer"))
 
     async def set_sleep_timer(self, value: int) -> None:
-        """The sleep timer.
-        Valid settings are 0, 30, 60, 90, 120
+        """Set the sleep timer.
+
+        Valid settings are 0, 30, 60, 90, and 120.
+
         Raises:
-            AttributeError: On setting if the argument value is not valid
+            AttributeError: If the value is out of range or not divisible by 30.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         time = int(value)
         if time < 0 or time > 120 or time % 30 != 0:
@@ -269,9 +317,10 @@ class Controller:
 
     async def set_free_air(self, value: bool) -> None:
         """Turn the free air system on or off.
+
         Raises:
-            AttributeError: If attempting to set the state of the free air
-                system when it is not enabled.
+            AttributeError: If the free air system is not enabled.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if not self.free_air_enabled:
             raise AttributeError("Free air is disabled")
@@ -291,15 +340,18 @@ class Controller:
         return float(self._get_system_state("Setpoint")) or None
 
     async def set_temp_setpoint(self, value: float) -> None:
-        """AC unit setpoint temperature.
-        This is the unit target temp with with rasMode == RAS,
-        or with rasMode == master and ctrlZone == 13.
+        """Set the AC unit setpoint temperature.
+
+        This is the unit target temperature when ``rasMode == RAS``, or when
+        ``rasMode == master`` and ``ctrlZone == 13``.
+
         Args:
-            value: Valid settings are between ecoMin and ecoMax, at
-            0.5 degree units.
+            value: Valid settings are between ecoMin and ecoMax in 0.5 degree
+                steps.
+
         Raises:
-            AttributeError: On setting if the argument value is not valid.
-                Can still be set even if the mode isn't appropriate.
+            AttributeError: If the value is out of range or not rounded to 0.5.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if value % 0.5 != 0:
             raise AttributeError(f"SetPoint '{value}' not rounded to nearest 0.5")
@@ -342,13 +394,22 @@ class Controller:
 
     @property
     def zone_ctrl(self) -> int:
-        """This indicates the zone that currently controls the AC unit.
-        Value interpreted in combination with rasMode"""
+        """Zone that currently controls the AC unit.
+
+        Value is interpreted in combination with :attr:`ras_mode`.
+
+        Raises:
+            TypeError: If the cached value is missing or not numeric.
+        """
         return int(self._get_system_state("CtrlZone"))
 
     @property
     def zones_total(self) -> int:
-        """This indicates the number of zones the system is configured for."""
+        """Number of zones the system is configured for.
+
+        Raises:
+            TypeError: If the cached value is missing or not numeric.
+        """
         return int(self._get_system_state("NoOfZones"))
 
     @property
@@ -369,6 +430,12 @@ class Controller:
         return self._get_system_state("SysType")
 
     async def _refresh_all(self, notify: bool = True) -> None:
+        """Refresh system, power, and zone data from the device.
+
+        Raises:
+            ConnectionError: If any HTTP request fails.
+            KeyError: If a required field is missing from a device response.
+        """
         zones = int(self._system_settings["NoOfZones"])
         # this has to be done sequentially
         await self._refresh_system(notify)
@@ -377,7 +444,12 @@ class Controller:
             await self._refresh_zone_group(i, notify)
 
     async def _refresh_system(self, notify: bool = True) -> None:
-        """Refresh the system settings."""
+        """Refresh the system settings from the device.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+            KeyError: If the response is missing required fields.
+        """
         values: Controller.ControllerData = await self._get_resource("SystemSettings")
         if self._device_uid != values["AirStreamDeviceUId"]:
             _LOG.error("_refresh_system called with non-matching device ID")
@@ -389,6 +461,13 @@ class Controller:
             self._event_coordinator.controller_update(self)
 
     async def _refresh_power(self, notify: bool = True) -> None:
+        """Refresh power monitor data when enabled.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+            json.JSONDecodeError: If the device response is not valid JSON.
+            KeyError: If the response is missing required fields.
+        """
         if self._power is None or not self._power.enabled:
             return
 
@@ -398,13 +477,26 @@ class Controller:
             self._event_coordinator.power_update(self)
 
     async def _refresh_zones(self, notify: bool = True) -> None:
-        """Refresh the Zone information."""
+        """Refresh all zone groups from the device.
+
+        Raises:
+            ConnectionError: If any HTTP request fails.
+            KeyError: If a response is missing required fields.
+            AttributeError: If a zone index in the response does not match.
+        """
         zones = int(self._system_settings["NoOfZones"])
         await asyncio.gather(
             *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
         )
 
     async def _refresh_zone_group(self, group: int, notify: bool = True) -> None:
+        """Refresh one zone group from the device.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+            KeyError: If the response is missing required fields.
+            AttributeError: If a zone index in the response does not match.
+        """
         assert group in [0, 4, 8]
         zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
 
@@ -414,7 +506,7 @@ class Controller:
             self.zones[i + group]._update_zone(zone_data, notify)
 
     def _refresh_address(self, address: str) -> None:
-        """Called from discovery to update the address"""
+        """Update the device IP and schedule a reconnect attempt if needed."""
         self._ip = address
         # Signal to the retry connection loop to have another go.
         if self._fail_exception:
@@ -430,6 +522,11 @@ class Controller:
         value: DictValue,
         send: Any | None = None,
     ) -> None:
+        """Send a system command and update the local cache.
+
+        Raises:
+            ConnectionError: If the HTTP request fails.
+        """
         if send is None:
             send = value
         await self._send_command_async(command, {command: send})
@@ -462,6 +559,11 @@ class Controller:
         self._event_coordinator.controller_reconnected(self)
 
     async def _retry_connection(self) -> None:
+        """Attempt to restore connectivity after a connection failure.
+
+        Connection errors are logged and not re-raised. A successful refresh
+        clears :attr:`connected` via :meth:`_restored_connection`.
+        """
         _LOG.info(
             "Attempting to reconnect to server uid=%s ip=%s",
             self.device_uid,
@@ -479,6 +581,12 @@ class Controller:
             )
 
     async def _get_resource(self, resource: str) -> Any:
+        """Fetch a JSON resource from the device via HTTP GET.
+
+        Raises:
+            ConnectionError: If the device cannot be reached, the response
+                cannot be decoded, or the HTTP request fails.
+        """
         try:
             session = self._discovery_service.session
             async with (
@@ -506,6 +614,15 @@ class Controller:
             raise ConnectionError("Unable to connect to the controller") from ex
 
     async def _send_command_async(self, command: str, data: Any) -> str:
+        """Send a command to the device via HTTP POST.
+
+        Raises:
+            ConnectionError: If the device cannot be reached, returns a
+                non-200 status, returns an ``{ERROR...}`` payload, or the
+                HTTP request fails.
+            RuntimeError: If the device returns an empty or malformed HTTP
+                response.
+        """
         # For some reason aiohttp fragments post requests, which causes
         # the server to fail disgracefully. Implemented rough and dirty
         # HTTP POST client.

@@ -1,7 +1,7 @@
 """
 Zone object.
 
-Various properties allow interogation and setting of zone data.
+Various properties allow interrogation and setting of zone data.
 """
 
 from enum import Enum
@@ -9,14 +9,25 @@ from typing import Any, Dict, Union
 
 
 class Zone:
-    """Interface to IZone zone"""
+    """Interface to an iZone zone.
+
+    **Reading state:** properties return cached zone data and do not perform
+    I/O. They do not raise :exc:`ConnectionError` when the parent controller
+    is disconnected.
+
+    **Updating state:** async command methods perform HTTP I/O via the parent
+    :class:`~pizone.controller.Controller` and raise :exc:`ConnectionError` on
+    failure.
+    """
 
     class Type(Enum):
-        """Zone Type enumeration
-        This indicates the type of the zone. Possible values are:
-        'auto' – the zone has temperature control enabled
-        'opcl' – the zone is open/close only
-        'const' – the zone is a constant zone
+        """Zone type enumeration.
+
+        Possible values are:
+
+        ``auto`` – the zone has temperature control enabled
+        ``opcl`` – the zone is open/close only
+        ``const`` – the zone is a constant zone
         """
 
         AUTO = "auto"
@@ -24,10 +35,13 @@ class Zone:
         CONST = "const"
 
     class Mode(Enum):
-        """This indicates the current mode the zone is in. Possible values are:
-        'open' – the zone is currently open
-        'close' – the zone is currently closed
-        'auto' – the zone is currently in temperature control mode
+        """Current zone mode.
+
+        Possible values are:
+
+        ``open`` – the zone is currently open
+        ``close`` – the zone is currently closed
+        ``auto`` – the zone is currently in temperature control mode
         """
 
         OPEN = "open"
@@ -44,58 +58,58 @@ class Zone:
 
     @property
     def index(self) -> int:
-        """The index of the zone"""
+        """The index of the zone."""
         return self._index
 
     @property
     def name(self) -> str:
-        """Zone name"""
+        """Zone name."""
         return self._get_zone_state("Name")
 
     @property
     def type(self) -> "Zone.Type":
-        """This indicates the type of the zone. Possible values are:
-        'auto' – the zone has temperature control enabled
-        'opcl' – the zone is open/close only
-        'const' – the zone is a constant zone
+        """Zone type.
+
+        Raises:
+            ValueError: If the cached value is not a valid :class:`Type` member.
         """
         return self.Type(self._get_zone_state("Type"))
 
     @property
     def mode(self) -> "Zone.Mode":
-        """This indicates the current mode the zone is in. Possible values are:
-        'open' – the zone is currently open
-        'close' – the zone is currently closed
-        'auto' – the zone is currently in temperature control mode
+        """Current zone mode.
+
+        Raises:
+            ValueError: If the cached value is not a valid :class:`Mode` member.
         """
         return self.Mode(self._get_zone_state("Mode"))
 
     @property
     def temp_setpoint(self) -> float | None:
-        """Temp setpoint in degrees C."""
+        """Temperature setpoint in degrees C."""
         return self._get_zone_state("SetPoint") or None
 
     @property
     def temp_current(self) -> float | None:
-        """Current zone temperature"""
+        """Current zone temperature."""
         return self._get_zone_state("Temp") or None
 
     @property
     def airflow_max(self) -> int:
-        """Max allowed airflow for the zone as a percent"""
+        """Maximum allowed airflow for the zone as a percent."""
         return self._get_zone_state("MaxAir")
 
     @property
     def airflow_min(self) -> int:
-        """Min allowed airflow for the zone as a percent"""
+        """Minimum allowed airflow for the zone as a percent."""
         return self._get_zone_state("MinAir")
 
     async def set_airflow_min(self, value: int) -> None:
-        """
-        Change the zone airflow min in 5% increments
-        Valid values are percent in 5% increments.
+        """Change the zone minimum airflow in 5% increments.
+
         Raises:
-            AttributeError if the set point is out of range
+            AttributeError: If the value is out of range or not divisible by 5.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if value % 5 != 0:
             raise AttributeError(f"MinAir '{value}' not rounded to nearest 5")
@@ -107,11 +121,11 @@ class Zone:
         self._fire_listeners()
 
     async def set_airflow_max(self, value: int) -> None:
-        """
-        Change the zone airflow max in 5% increments
-        Valid values are percent in 5% increments.
+        """Change the zone maximum airflow in 5% increments.
+
         Raises:
-            AttributeError if the set point is out of range
+            AttributeError: If the value is out of range or not divisible by 5.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if value % 5 != 0:
             raise AttributeError(f"MaxAir '{value}' not rounded to nearest 5")
@@ -123,12 +137,15 @@ class Zone:
         self._fire_listeners()
 
     async def set_temp_setpoint(self, value: float) -> None:
-        """
-        Change the setpoint for the zone in degrees C.
-        Valid values are between the min and max temp on the controller,
-        and in half-degree increments
+        """Change the zone temperature setpoint in degrees C.
+
+        Valid values are between the controller minimum and maximum temperature
+        in half-degree increments.
+
         Raises:
-            AttributeError if the set point is out of range
+            AttributeError: If the zone is not temperature controlled or the
+                value is out of range.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if self.type != Zone.Type.AUTO:
             raise AttributeError(f"Can't set SetPoint to '{self.type}' type zone.")
@@ -144,10 +161,10 @@ class Zone:
 
     async def set_mode(self, value: "Zone.Mode") -> None:
         """Set the current zone mode.
-        Possible values are:
-        'open' – the zone is currently open
-        'close' – the zone is currently closed
-        'auto' – the zone is currently in temperature control mode
+
+        Raises:
+            AttributeError: If auto mode is requested on an open/close zone.
+            ConnectionError: If the device cannot be reached or the response is invalid.
         """
         if value == Zone.Mode.AUTO:
             if self.type != Zone.Type.AUTO:
@@ -160,6 +177,11 @@ class Zone:
         self._fire_listeners()
 
     def _update_zone(self, zone_data: "Zone.ZoneData", notify: bool = True) -> None:
+        """Replace cached zone data from a device refresh.
+
+        Raises:
+            AttributeError: If the response index does not match this zone.
+        """
         if zone_data["Index"] != self._index:
             raise AttributeError("Can't change index of existing zone.")
         self._zone_data = zone_data
@@ -174,6 +196,11 @@ class Zone:
         return self._zone_data.get(state)
 
     async def _send_command(self, command: str, data: Union[str, float, int]) -> None:
+        """Send a zone command via the parent controller.
+
+        Raises:
+            ConnectionError: If the device cannot be reached or the response is invalid.
+        """
         send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}
         # pylint: disable=protected-access
         await self._controller._send_command_async(command, send_data)

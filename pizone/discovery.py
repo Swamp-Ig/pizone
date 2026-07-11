@@ -84,14 +84,17 @@ class Listener:
 
 
 class DiscoveryService:
-    """Discovery service: manages controller registry, listener fanout, and UDP scanning."""
+    """Discovery service for controller registry, listener fanout, and UDP scanning."""
 
     def __init__(self, session: ClientSession | None = None) -> None:
-        """Start the discovery protocol using the supplied loop.
+        """Create a discovery service.
 
-        raises:
-            RuntimeError: If attempted to start the protocol when it is
-                          already running.
+        Call :meth:`start_discovery` or use the service as an async context
+        manager to begin scanning.
+
+        Args:
+            session: Optional shared :class:`aiohttp.ClientSession`. When
+                omitted, the service creates and owns its own session.
         """
         self._controllers: dict[str, Controller] = {}
         self._disconnected: set[str] = set()
@@ -182,7 +185,7 @@ class DiscoveryService:
 
     # managing the task list.
     def create_task(self, coro: Any) -> Task:
-        """Create a task in the event loop. Keeps track of created tasks."""
+        """Create a tracked task in the current event loop."""
         task: Task = asyncio.get_running_loop().create_task(coro)
         self._tasks.append(task)
 
@@ -191,9 +194,11 @@ class DiscoveryService:
 
     # Listeners.
     def add_listener(self, listener: Listener) -> None:
-        """Add a discovered listener.
+        """Register a listener for controller and zone events.
 
-        All existing controllers will be passed to the listener."""
+        All existing controllers are passed to the listener immediately via
+        :meth:`~pizone.discovery.Listener.controller_discovered`.
+        """
         self._listeners.append(listener)
 
         def callback() -> None:
@@ -203,12 +208,22 @@ class DiscoveryService:
         asyncio.get_running_loop().call_soon(callback)
 
     def remove_listener(self, listener: Listener) -> None:
-        """Remove a listener"""
+        """Remove a previously registered listener.
+
+        Raises:
+            ValueError: If *listener* is not registered.
+        """
         self._listeners.remove(listener)
 
     # Non-context versions of starting.
     async def start_discovery(self) -> None:
-        """Start discovery protocol. Creates UDP socket and begins scanning for devices."""
+        """Start the UDP discovery protocol and scan loop.
+
+        Raises:
+            OSError: If the discovery socket cannot be created or bound.
+            RuntimeError: If :meth:`start_discovery` is called when a
+                transport is already active.
+        """
         if self._own_session:
             self._session = ClientSession()
 
@@ -292,7 +307,13 @@ class DiscoveryService:
     async def fetch_controller(
         self, uid: str, timeout: float | None = None
     ) -> Controller | None:
-        """Return the controller with *uid*, optionally waiting up to *timeout* seconds."""
+        """Return the controller with *uid*.
+
+        When *timeout* is provided, waits up to that many seconds for the
+        controller to appear via UDP discovery.
+
+        Does not raise if the controller is not found; returns ``None`` instead.
+        """
         if uid in self._controllers:
             return self._controllers[uid]
         if timeout is None:
@@ -326,7 +347,13 @@ class DiscoveryService:
     async def fetch_controllers(
         self, timeout: float | None = None
     ) -> dict[str, Controller]:
-        """Return all known controllers, optionally waiting for discovery to settle."""
+        """Return all controllers currently known to the discovery service.
+
+        When *timeout* is provided, triggers a rescan and waits before
+        returning the registry snapshot.
+
+        Does not raise if no controllers are found.
+        """
         if timeout is None:
             return dict(self._controllers)
 
@@ -336,7 +363,7 @@ class DiscoveryService:
 
     # Closing the connection
     async def close(self) -> None:
-        """Close the transport"""
+        """Stop discovery, close the UDP transport, and cancel tracked tasks."""
         if self._close_task:
             await self._close_task
             return
@@ -381,6 +408,7 @@ class DiscoveryService:
         return None
 
     async def _wrap_update(self, coro: Any) -> None:
+        """Run a controller refresh coroutine and log connection failures."""
         try:
             await coro
         except ConnectionError:
@@ -470,10 +498,15 @@ class DiscoveryService:
 def discovery(
     *listeners: Listener, session: ClientSession | None = None
 ) -> DiscoveryService:
-    """Create discovery service. Returned object is a asynchronous
-    context manager so can be used with 'async with' statement.
-    Alternately call start_discovery or start_discovery_async to commence
-    the discovery process."""
+    """Create a discovery service.
+
+    The returned object is an async context manager and can also be started
+    manually with :meth:`DiscoveryService.start_discovery`.
+
+    Args:
+        listeners: Optional listeners registered before discovery starts.
+        session: Optional shared :class:`aiohttp.ClientSession`.
+    """
     service = DiscoveryService(session=session)
     for listener in listeners:
         service.add_listener(listener)
