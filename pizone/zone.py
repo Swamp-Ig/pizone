@@ -1,7 +1,7 @@
 """
-Zone object.
+Zone interface.
 
-Various properties allow interrogation and setting of zone data.
+Properties for reading and setting zone data.
 """
 
 from enum import Enum

@@ -34,7 +34,7 @@ _LOG = logging.getLogger("pizone.discovery")
 
 
 class LogExceptions:
-    """Utility context manager to log and discard exceptions"""
+    """Context manager that logs and suppresses listener exceptions."""
 
     def __init__(self, func: str) -> None:
         self.func = func
@@ -51,40 +51,37 @@ class LogExceptions:
 
 
 class Listener:
-    """Base class for listeners for iZone updates"""
+    """Base class for iZone controller event listeners."""
 
     def controller_discovered(self, ctrl: Controller) -> None:
-        """
-        New controller discovered. This will also be called for all
-        existing controllers if a new listener is registered
+        """Called when a controller is discovered.
+
+        Also called for every existing controller when a new listener is
+        registered.
         """
 
     def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
-        """
-        Connection lost to controller. Exception argument will show reason why.
+        """Called when the connection to a controller is lost.
+
+        Args:
+            ex: The exception that caused the disconnect.
         """
 
     def controller_reconnected(self, ctrl: Controller) -> None:
-        """
-        Reconnected to controller.
-        """
+        """Called when a controller reconnects after a connection failure."""
 
     def controller_update(self, ctrl: Controller) -> None:
-        """Called when a system update message is received from the controller.
-        Controller data will be set to new value.
-        """
+        """Called when controller system data is refreshed."""
 
     def zone_update(self, ctrl: Controller, zone: Zone) -> None:
-        """Called when a zone update message is received from the controller
-        Zone data will be set to new value.
-        """
+        """Called when zone data is refreshed."""
 
     def power_update(self, ctrl: Controller) -> None:
-        """Called when the power monitor updates."""
+        """Called when power monitor data is refreshed."""
 
 
 class DiscoveryService:
-    """Discovery service for controller registry, listener fanout, and UDP scanning."""
+    """Discovery service for the controller registry, listener fan-out, and UDP scanning."""
 
     def __init__(self, session: ClientSession | None = None) -> None:
         """Create a discovery service.
@@ -115,7 +112,7 @@ class DiscoveryService:
         _srv = self
 
         class _EventCoordinator(Listener):
-            """Fan-out adapter: dispatches controller/zone events to all registered listeners."""
+            """Fan-out adapter that dispatches controller and zone events to listeners."""
 
             # pylint: disable=protected-access
 
@@ -388,7 +385,7 @@ class DiscoveryService:
 
     @property
     def is_closed(self) -> bool:
-        """Check if the discovery service is closed."""
+        """Return whether the discovery service is closed."""
         if self._transport:
             return self._transport.is_closing()
         return self._close_task is not None

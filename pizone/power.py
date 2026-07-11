@@ -1,7 +1,7 @@
 """
-Power object.
+Power monitor interface.
 
-Various bits of data relating to power monitoring.
+Properties for reading power monitoring configuration and status data.
 """
 
 from __future__ import annotations
@@ -16,23 +16,23 @@ _LOG = logging.getLogger("pizone.power")
 
 @unique
 class BatteryLevel(IntEnum):
-    """Battery level for power device"""
+    """Battery level for a power device."""
 
     CRITICAL = 0
-    """Reading <600"""
+    """Reading below 600."""
 
     LOW = 1
-    """600-700"""
+    """Reading between 600 and 700."""
 
     NORMAL = 2
-    """700-800"""
+    """Reading between 700 and 800."""
 
     FULL = 3
-    """>800"""
+    """Reading above 800."""
 
 
 class PowerChannel:
-    """Channel within power device"""
+    """Channel within a power device."""
 
     def __init__(self, device: PowerDevice, index: int) -> None:
         self._device = device
@@ -50,17 +50,17 @@ class PowerChannel:
 
     @property
     def device(self) -> PowerDevice:
-        """Gets the parent power device"""
+        """Parent power device."""
         return self._device
 
     @property
     def index(self) -> int:
-        """Channel index"""
+        """Channel index."""
         return self._index
 
     @property
     def enabled(self) -> bool:
-        """Add to group total."""
+        """Return whether this channel is enabled."""
         return bool(self._config["Enabled"])
 
     @property
@@ -70,28 +70,28 @@ class PowerChannel:
 
     @property
     def group_number(self) -> int | None:
-        """Group number"""
+        """Group number, or ``None`` if not assigned."""
         num = self._config["GrNo"]
         return num if num < 255 else None
 
     @property
     def generate(self) -> bool:
-        """True if this channel is generating power"""
+        """Return whether this channel is generating power."""
         return bool(self._config["Generate"])
 
     @property
     def add_to_total(self) -> bool:
-        """Add to group total"""
+        """Return whether this channel is included in the group total."""
         return bool(self._config["AddToTotal"])
 
     @property
     def status_power(self) -> int:
-        """Power in watts"""
+        """Current power reading in watts."""
         return self._status["Pwr"]
 
 
 class PowerDevice:
-    """Device for power information."""
+    """Power monitor device."""
 
     def __init__(self, power: Power, index: int) -> None:
         self._power = power
@@ -115,27 +115,27 @@ class PowerDevice:
 
     @property
     def enabled(self) -> bool:
-        """Enabled flag"""
+        """Return whether this device is enabled."""
         return bool(self._config["Enabled"])
 
     @property
     def status_ok(self) -> bool:
-        """True if device OK"""
+        """Return whether the device status is OK."""
         return bool(self._status["Ok"])
 
     @property
     def status_batt(self) -> BatteryLevel:
-        """Battery level"""
+        """Battery level."""
         return BatteryLevel(self._status["Batt"])
 
     @property
     def channels(self) -> Tuple[PowerChannel, ...]:
-        """All known devices, a 5-length tuple"""
+        """Channels on this device."""
         return self._channels
 
 
 class PowerGroup:
-    """Grouped power devices"""
+    """Grouped power channels."""
 
     def __init__(self, power: Power, channels: Iterable[PowerChannel]) -> None:
         self._power = power
@@ -158,12 +158,12 @@ class PowerGroup:
 
     @property
     def status_ok(self) -> bool:
-        """True if the power group is connected"""
+        """Return whether all devices in the group are OK."""
         return all(d.status_ok for d in self._devices)
 
     @property
     def status_power(self) -> int:
-        """Currently using power status."""
+        """Current power usage for the group in watts."""
         return self._channels[0].status_power
 
 
@@ -263,12 +263,12 @@ class Power:
 
     @property
     def status_last_reading(self) -> int:
-        """Emissions in gCOe per kWh."""
+        """Last reading number from the device."""
         return self._status["lastReadingNo"]
 
     @property
     def devices(self) -> Tuple[PowerDevice, ...]:
-        """All known devices, a 5-length tuple"""
+        """All known power monitor devices."""
         return self._devices
 
     @property

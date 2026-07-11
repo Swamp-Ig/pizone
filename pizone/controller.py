@@ -1,4 +1,4 @@
-"""Controller module"""
+"""iZone controller interface."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class Controller:
     """
 
     class Mode(Enum):
-        """Valid controller modes"""
+        """Valid controller modes."""
 
         COOL = "cool"
         HEAT = "heat"
@@ -47,7 +47,7 @@ class Controller:
         FREE_AIR = "free_air"
 
     class Fan(Enum):
-        """All fan modes"""
+        """Valid fan modes."""
 
         LOW = "low"
         MED = "med"
@@ -59,13 +59,13 @@ class Controller:
     ControllerData = Dict[str, DictValue]
 
     REQUEST_TIMEOUT = 3
-    """Time to wait for results from server."""
+    """Time to wait for a response from the device, in seconds."""
 
     REFRESH_INTERVAL = 25.0
-    """Interval between refreshes of data."""
+    """Interval between data refreshes, in seconds."""
 
     UPDATE_REFRESH_DELAY = 5.0
-    """Delay after updating data before a refresh."""
+    """Delay after sending a command before refreshing data, in seconds."""
 
     _VALID_FAN_MODES = {
         "disabled": [Fan.LOW, Fan.MED, Fan.HIGH],
@@ -88,16 +88,11 @@ class Controller:
     ) -> None:
         """Create a controller interface.
 
-        Usually this is called from the discovery service. If neither
-        device UID or address are specified, will search network for
-        exactly one controller. If UID is specified then the addr is
-        ignored.
+        This is usually called from the discovery service.
 
         Args:
-            device_uid: Controller UId as a string (eg: mine is '000013170')
-                If specified, will search the network for a matching device
-            device_addr: Device network address. Usually specified as IP
-                address
+            device_uid: Controller UID as a string (for example, ``000013170``).
+            device_ip: Device IP address.
 
         Property reads return cached data and do not raise when disconnected;
         check :attr:`connected` or handle :exc:`ConnectionError` from async
@@ -188,32 +183,32 @@ class Controller:
 
     @property
     def power(self) -> Power | None:
-        """Power info"""
+        """Power monitor data, or ``None`` if not configured."""
         return self._power
 
     @property
     def device_ip(self) -> str:
-        """IP Address of the unit"""
+        """IP address of the unit."""
         return self._ip
 
     @property
     def device_uid(self) -> str:
-        """UId of the unit"""
+        """UID of the unit."""
         return self._device_uid
 
     @property
     def is_v2(self) -> bool:
-        """True if this is a v2 controller"""
+        """Return whether this is a v2 controller."""
         return self._is_v2
 
     @property
     def discovery(self) -> Any:
-        """The discovery service"""
+        """Discovery service for this controller."""
         return self._discovery_service
 
     @property
     def is_on(self) -> bool:
-        """True if the system is turned on"""
+        """Return whether the system is turned on."""
         return self._get_system_state("SysOn") == "on"
 
     async def set_on(self, value: bool) -> None:
@@ -226,7 +221,7 @@ class Controller:
 
     @property
     def mode(self) -> "Mode":
-        """System mode, cooling, heating, etc.
+        """System mode (cooling, heating, etc.).
 
         Raises:
             ValueError: If the cached mode is not a valid :class:`Mode` member.
@@ -236,7 +231,7 @@ class Controller:
         return self.Mode(self._get_system_state("SysMode"))
 
     async def set_mode(self, value: Mode) -> None:
-        """Set system mode, cooling, heating, etc.
+        """Set the system mode (cooling, heating, etc.).
 
         Raises:
             AttributeError: If free air mode is requested but not enabled.
@@ -307,12 +302,12 @@ class Controller:
 
     @property
     def free_air_enabled(self) -> bool:
-        """Test if the system has free air system available"""
+        """Return whether the free air system is available."""
         return self._get_system_state("FreeAir") != "disabled"
 
     @property
     def free_air(self) -> bool:
-        """True if the free air system is turned on. False if unavailable or off"""
+        """Return whether the free air system is on."""
         return self._get_system_state("FreeAir") == "on"
 
     async def set_free_air(self, value: bool) -> None:
@@ -334,8 +329,9 @@ class Controller:
     @property
     def temp_setpoint(self) -> float | None:
         """AC unit setpoint temperature.
-        This is the unit target temp with with rasMode == RAS,
-        or with rasMode == master and ctrlZone == 13.
+
+        This is the unit target temperature when ``rasMode == RAS``, or when
+        ``rasMode == master`` and ``ctrlZone == 13``.
         """
         return float(self._get_system_state("Setpoint")) or None
 
@@ -361,34 +357,34 @@ class Controller:
 
     @property
     def temp_return(self) -> float | None:
-        """The return, or room, air temperature"""
+        """Return air temperature."""
         return float(self._get_system_state("Temp")) or None
 
     @property
     def eco_lock(self) -> bool:
-        """True if eco lock setting is on."""
+        """Return whether the eco lock setting is on."""
         return self._get_system_state("EcoLock") == "true"
 
     @property
     def temp_min(self) -> float:
-        """The value for the eco lock minimum, or 15 if eco lock not set"""
+        """Minimum temperature from eco lock, or 15 if eco lock is off."""
         return float(self._get_system_state("EcoMin")) if self.eco_lock else 15.0
 
     @property
     def temp_max(self) -> float:
-        """The value for the eco lock maximum, or 30 if eco lock not set"""
+        """Maximum temperature from eco lock, or 30 if eco lock is off."""
         return float(self._get_system_state("EcoMax")) if self.eco_lock else 30.0
 
     @property
     def ras_mode(self) -> str:
-        """This indicates the current selection of the Return Air temperature Sensor.
+        """Return air sensor selection mode.
+
         Possible values are:
-            master: the AC unit is controlled from a CTS, which is manually
-                selected.
-            RAS:    the AC unit is controller from its own return air sensor
-            zones:  the AC unit is controlled from a CTS, which is
-                automatically selected dependant on the cooling/ heating need
-                of zones.
+
+        ``master``: the AC unit is controlled from a manually selected CTS.
+        ``RAS``: the AC unit is controlled from its own return air sensor.
+        ``zones``: the AC unit is controlled from a CTS that is automatically
+        selected based on the heating or cooling need of the zones.
         """
         return self._get_system_state("RAS")
 
@@ -414,18 +410,18 @@ class Controller:
 
     @property
     def zones_const(self) -> int:
-        """This indicates the number of constant zones the system is
-        configured for."""
+        """Number of constant zones the system is configured for."""
         return self._get_system_state("NoOfConst")
 
     @property
     def sys_type(self) -> str:
-        """This indicates the type of the iZone system connected. Possible values are:
-        110: the system is zone control only and all the zones
-            are OPEN/CLOSE zones
-        210: the system is zone control only. Zones can be temperature
-            controlled, dependant on the zone settings.
-        310: the system is zone control and unit control.
+        """Type of the connected iZone system.
+
+        Possible values are:
+
+        ``110``: zone control only; all zones are open/close zones.
+        ``210``: zone control only; zones may be temperature controlled.
+        ``310``: zone control and unit control.
         """
         return self._get_system_state("SysType")
 
@@ -562,7 +558,7 @@ class Controller:
         """Attempt to restore connectivity after a connection failure.
 
         Connection errors are logged and not re-raised. A successful refresh
-        clears :attr:`connected` via :meth:`_restored_connection`.
+        restores :attr:`connected` via :meth:`_restored_connection`.
         """
         _LOG.info(
             "Attempting to reconnect to server uid=%s ip=%s",
@@ -669,7 +665,7 @@ class Controller:
                 _, content = full.split("\r\n\r\n", 1)
                 on_complete.set_result(content)
 
-        # The server doesn't tolerate multiple requests in fly concurrently
+        # The server doesn't tolerate multiple requests in flight concurrently
         try:
             async with self._sending_lock, asyncio.timeout(Controller.REQUEST_TIMEOUT):
                 await loop.create_connection(_PostProtocol, self.device_ip, 80)

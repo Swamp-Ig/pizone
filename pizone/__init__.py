@@ -1,4 +1,4 @@
-"""Interface to the iZone airconditioner controller.
+"""Interface to the iZone air conditioner controller.
 
 Interaction is mostly through the :class:`~pizone.controller.Controller` and
 :class:`~pizone.zone.Zone` classes.
