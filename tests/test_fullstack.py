@@ -3,7 +3,7 @@
 from asyncio import Event, TimeoutError, wait_for
 
 from pizone import Controller, Listener, Zone, discovery
-from pytest import fail, mark, raises
+from pytest import mark, raises
 
 
 class ListenerTesting(Listener):
@@ -172,19 +172,28 @@ async def test_reconnect():
 
 @mark.hardware
 async def test_power():
-
     listener = ListenerTesting()
 
     async with discovery(listener):
         ctrl = await listener.await_controller()
 
-        result = ctrl.power
+        assert ctrl.power is not None
+        assert ctrl.power.enabled
 
-        result = await ctrl._send_command_async(
-            "iZoneRequestV2", {"iZoneV2Request": {"Type": 2, "No": 0, "No1": 0}}
+        updated = await ctrl.power.refresh()
+        assert isinstance(updated, bool)
+
+        enabled_channels = [
+            channel
+            for device in ctrl.power.devices
+            if device.enabled
+            for channel in device.channels
+            if channel.enabled
+        ]
+        assert enabled_channels
+        channel = enabled_channels[0]
+        assert isinstance(channel.status_power, int)
+        print(
+            f"power channel {channel.name}: {channel.status_power}W "
+            f"ok={channel.device.status_ok}"
         )
-        import json
-
-        result = json.loads(result)
-
-        dump_data(ctrl)

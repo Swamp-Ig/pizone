@@ -58,7 +58,7 @@ class Controller:
     DictValue = Union[str, int, float]
     ControllerData = Dict[str, DictValue]
 
-    REQUEST_TIMEOUT = 3
+    REQUEST_TIMEOUT = 10
     """Time to wait for a response from the device, in seconds."""
 
     REFRESH_INTERVAL = 25.0
