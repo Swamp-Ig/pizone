@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
   "aiohttp>=3.14.1",
-  "netifaces>=0.11",
+  "ifaddr>=0.2.0",
 ]
 dynamic = ["version"]
 

@@ -10,9 +10,10 @@ from asyncio import (
     Task,
 )
 from contextlib import suppress
+from ipaddress import IPv4Interface
 from typing import Any
 
-import netifaces  # type: ignore
+import ifaddr
 from aiohttp import ClientSession
 
 from .controller import Controller
@@ -257,14 +258,12 @@ class DiscoveryService:
         self.create_task(self._scan_loop())
 
     def _get_broadcasts(self) -> Any:
-        for ifaddr in map(netifaces.ifaddresses, netifaces.interfaces()):
-            inetaddrs = ifaddr.get(netifaces.AF_INET)
-            if not inetaddrs:
-                continue
-            for inetaddr in inetaddrs:
-                broadcast = inetaddr.get("broadcast")
-                if broadcast:
-                    yield broadcast
+        for adapter in ifaddr.get_adapters():
+            for ip in adapter.ips:
+                if not isinstance(ip.ip, str):
+                    continue
+                interface = IPv4Interface(f"{ip.ip}/{ip.network_prefix}")
+                yield str(interface.network.broadcast_address)
 
     def _send_broadcasts(self) -> None:
         assert self._transport is not None, "Discovery transport is not ready"
