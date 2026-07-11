@@ -21,7 +21,7 @@ classifiers = [
   "Topic :: System :: Hardware",
 ]
 dependencies = [
-  "aiohttp>=3.10",
+  "aiohttp>=3.14.1",
   "netifaces>=0.11",
 ]
 dynamic = ["version"]
@@ -73,6 +73,8 @@ git_describe_command = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not hardware'"
 markers = [
   "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
+  "hardware: requires a reachable iZone controller on the local network",
 ]

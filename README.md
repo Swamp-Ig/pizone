@@ -39,4 +39,6 @@ Individual commands:
 
 To run integration tests against a controller on your network:
 
-`uv run pytest tests/test_fullstack.py`
+```bash
+uv run pytest tests/test_fullstack.py -m hardware -o addopts=
+```

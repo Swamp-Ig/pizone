@@ -3,7 +3,7 @@
 from asyncio import Event, TimeoutError, wait_for
 
 from pizone import Controller, Listener, Zone, discovery
-from pytest import fail, raises
+from pytest import fail, mark, raises
 
 
 class ListenerTesting(Listener):
@@ -75,6 +75,7 @@ def dump_data(ctrl):
         )
 
 
+@mark.hardware
 async def test_full_stack():
     listener = ListenerTesting()
 
@@ -145,6 +146,7 @@ async def test_full_stack():
         dump_data(ctrl)
 
 
+@mark.hardware
 async def test_reconnect():
     listener = ListenerTesting()
 
@@ -168,6 +170,7 @@ async def test_reconnect():
         await ctrl.set_sleep_timer(0)
 
 
+@mark.hardware
 async def test_power():
 
     listener = ListenerTesting()

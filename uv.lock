@@ -580,7 +580,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10" },
+    { name = "aiohttp", specifier = ">=3.14.1" },
     { name = "netifaces", specifier = ">=0.11" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=6.2.2" },
     { name = "pytest-aio", marker = "extra == 'test'" },
