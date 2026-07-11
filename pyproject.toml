@@ -55,6 +55,9 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "pizone/version.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["pizone"]
+
 [tool.hatch.version.raw-options]
 git_describe_command = [
   "git",
