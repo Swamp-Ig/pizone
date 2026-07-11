@@ -87,11 +87,9 @@ class Controller:
             device_addr: Device network address. Usually specified as IP
                 address
 
-        Raises:
-            ConnectionAbortedError: If id is not set and more than one iZone
-                instance is discovered on the network.
-            ConnectionRefusedError: If no iZone discovered, or no iZone
-                device discovered at the given IP address or UId
+        Property reads return cached data and do not raise when disconnected;
+        check :attr:`connected` or handle :exc:`ConnectionError` from async
+        methods instead.
         """
         self._ip = device_ip
         self._discovery_service = discovery_service
@@ -165,7 +163,7 @@ class Controller:
 
     @property
     def connected(self) -> bool:
-        """True if the controller is currently connected"""
+        """True while the controller can reach the device over HTTP."""
         return self._fail_exception is None
 
     @property
@@ -423,7 +421,6 @@ class Controller:
             self._discovery_service.create_task(self._retry_connection())
 
     def _get_system_state(self, state: str) -> Any:
-        self._ensure_connected()
         return self._system_settings.get(state)
 
     async def _set_system_state(
@@ -441,12 +438,6 @@ class Controller:
         self._system_settings[state] = value
         self._event_coordinator.controller_update(self)
         await self.refresh()
-
-    def _ensure_connected(self) -> None:
-        if self._fail_exception:
-            raise ConnectionError(
-                "Unable to connect to the controller"
-            ) from self._fail_exception
 
     def _failed_connection(self, ex: Exception) -> None:
         if self._fail_exception:

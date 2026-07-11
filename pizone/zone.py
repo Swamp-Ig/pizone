@@ -171,8 +171,7 @@ class Zone:
         self._controller._event_coordinator.zone_update(self._controller, self)
 
     def _get_zone_state(self, state: str) -> Any:
-        self._controller._ensure_connected()  # pylint: disable=protected-access  # noqa
-        return self._zone_data[state]
+        return self._zone_data.get(state)
 
     async def _send_command(self, command: str, data: Union[str, float, int]) -> None:
         send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}

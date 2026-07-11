@@ -121,6 +121,22 @@ async def test_ip_addr_change(service):
 
 
 @pytest.mark.asyncio
+async def test_disconnected_reads_return_cached_state(service):
+    """Sync property reads use cached data and do not raise when disconnected."""
+    controller = service._controllers["000000001"]  # type: Controller
+    assert controller.mode == Controller.Mode.HEAT
+
+    controller._failed_connection(ConnectionError("Fake connection error"))
+    assert not controller.connected
+
+    assert controller.mode == Controller.Mode.HEAT
+    assert controller.zones[0].name == "LIVING"
+
+    with raises(ConnectionError):
+        await controller.set_mode(Controller.Mode.COOL)
+
+
+@pytest.mark.asyncio
 async def test_reconnect(service, caplog):
     controller = service._controllers["000000001"]  # type: Controller
     assert controller.device_uid == "000000001"
