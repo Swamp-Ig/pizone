@@ -1,12 +1,75 @@
 [build-system]
-requires = [
-    "setuptools >= 65",
-    "setuptools_scm[toml] >= 6.2",
-    "setuptools_scm_git_archive",
-    "wheel >= 0.37.0",
-]
-build-backend = 'setuptools.build_meta'
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
-[tool.setuptools_scm]
-write_to = "pizone/version.py"
-git_describe_command = "git describe --dirty --tags --long --match v* --first-parent"
+[project]
+name = "python-izone"
+description = "A python interface to the iZone airconditioner controller"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["licence.txt"]
+authors = [{ name = "Penny Wood", email = "pypl@ninjateaparty.com" }]
+requires-python = ">=3.14"
+keywords = ["iZone", "IoT"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.14",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Operating System :: OS Independent",
+  "Topic :: Home Automation",
+  "Topic :: System :: Hardware",
+]
+dependencies = [
+  "aiohttp>=3.10",
+  "netifaces>=0.11",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/Swamp-Ig/pizone"
+
+[project.optional-dependencies]
+test = [
+  "pytest>=6.2.2",
+  "pytest-aio",
+  "pytest-aiohttp",
+]
+
+[dependency-groups]
+test = [
+  "pytest>=6.2.2",
+  "pytest-aio",
+  "pytest-aiohttp",
+]
+dev = [
+  { include-group = "test" },
+  "pylint",
+  "mypy",
+  "build",
+]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "pizone/version.py"
+
+[tool.hatch.version.raw-options]
+git_describe_command = [
+  "git",
+  "describe",
+  "--dirty",
+  "--tags",
+  "--long",
+  "--match",
+  "v*",
+  "--first-parent",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
+]
