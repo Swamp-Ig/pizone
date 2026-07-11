@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from pytest import raises
 
-from pizone import Controller, Listener, discovery
+from pizone import Controller, Listener, Zone, discovery
 from pizone.discovery import DiscoveryService
 
 
@@ -118,6 +118,56 @@ async def test_ip_addr_change(service):
     await sleep(0)
 
     assert controller.device_ip == "8.8.8.4"
+
+
+@pytest.mark.asyncio
+async def test_refresh_zones_supports_zone_extender_group(service):
+    """Verify that zones 13 and 14 are fetched from the extender endpoint."""
+    controller = service._controllers["000000001"]  # type: Controller
+    controller.resources["SystemSettings"]["NoOfZones"] = 14
+    controller._system_settings["NoOfZones"] = 14
+    controller.resources["Zones13_14"] = [
+        {
+            "AirStreamDeviceUId": "000000001",
+            "Id": 0,
+            "Index": 12,
+            "Name": "Zone 13",
+            "Type": "opcl",
+            "Mode": "open",
+            "SetPoint": 23,
+            "Temp": 0,
+            "MaxAir": 100,
+            "MinAir": 0,
+            "Const": 255,
+            "ConstA": "false",
+            "DmpFlt": "true",
+            "Master": "false",
+            "iSense": "off",
+        },
+        {
+            "AirStreamDeviceUId": "000000001",
+            "Id": 0,
+            "Index": 13,
+            "Name": "Zone 14",
+            "Type": "opcl",
+            "Mode": "open",
+            "SetPoint": 23,
+            "Temp": 0,
+            "MaxAir": 100,
+            "MinAir": 0,
+            "Const": 255,
+            "ConstA": "false",
+            "DmpFlt": "true",
+            "Master": "false",
+            "iSense": "off",
+        },
+    ]
+    controller.zones.extend(Zone(controller, i) for i in range(8, 14))
+
+    await controller._refresh_zones(notify=False)
+
+    assert controller.zones[12].name == "Zone 13"
+    assert controller.zones[13].name == "Zone 14"
 
 
 @pytest.mark.asyncio

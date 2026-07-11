@@ -492,9 +492,13 @@ class Controller:
             ConnectionError: If the HTTP request fails.
             KeyError: If the response is missing required fields.
             AttributeError: If a zone index in the response does not match.
+            ValueError: If the zone group is not supported.
         """
-        assert group in [0, 4, 8]
-        zone_data_part = await self._get_resource(f"Zones{group + 1}_{group + 4}")
+        if group not in (0, 4, 8, 12):
+            raise ValueError(f"Unsupported zone group start index {group}")
+
+        resource = "Zones13_14" if group == 12 else f"Zones{group + 1}_{group + 4}"
+        zone_data_part = await self._get_resource(resource)
 
         for i in range(min(len(self.zones) - group, 4)):
             zone_data = zone_data_part[i]
