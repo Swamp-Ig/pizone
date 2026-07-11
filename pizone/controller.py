@@ -433,11 +433,11 @@ class Controller:
             KeyError: If a required field is missing from a device response.
         """
         zones = int(self._system_settings["NoOfZones"])
-        # this has to be done sequentially
-        await self._refresh_system(notify)
-        await self._refresh_power(notify)
-        for i in range(0, zones, 4):
-            await self._refresh_zone_group(i, notify)
+        await asyncio.gather(
+            self._refresh_system(notify),
+            self._refresh_power(notify),
+            *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)],
+        )
 
     async def _refresh_system(self, notify: bool = True) -> None:
         """Refresh the system settings from the device.
