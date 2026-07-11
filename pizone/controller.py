@@ -8,7 +8,7 @@ import logging
 from asyncio import Condition, Lock
 from enum import Enum
 from json.decoder import JSONDecodeError
-from typing import TYPE_CHECKING, Any, Dict, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Union
 
 import aiohttp
 
@@ -620,63 +620,26 @@ class Controller:
             ConnectionError: If the device cannot be reached, returns a
                 non-200 status, returns an ``{ERROR...}`` payload, or the
                 HTTP request fails.
-            RuntimeError: If the device returns an empty or malformed HTTP
-                response.
         """
-        # For some reason aiohttp fragments post requests, which causes
-        # the server to fail disgracefully. Implemented rough and dirty
-        # HTTP POST client.
-        loop = asyncio.get_running_loop()
-        on_complete = loop.create_future()
-        device_ip = self.device_ip
-
-        class _PostProtocol(asyncio.Protocol):
-            def __init__(self) -> None:
-                self.response = bytearray()
-
-            def connection_made(self, transport: asyncio.BaseTransport) -> None:
-                body = json.dumps(data).encode("latin_1")
-                header = (
-                    f"POST /{command} HTTP/1.1\r\n"
-                    f"Host: {device_ip}\r\n"
-                    f"Content-Length: {str(len(body))}\r\n"
-                    "\r\n"
-                ).encode()
-                _LOG.debug("Writing message to %s", device_ip)
-                cast(asyncio.WriteTransport, transport).write(header + body)
-
-            def data_received(self, data: bytes) -> None:
-                self.response += data
-
-            def eof_received(self) -> None:
-                full = self.response.decode("latin_1")
-                if not full:
-                    on_complete.set_exception(RuntimeError("Empty HTTP Response"))
-                    return
-                header, _ = full.split("\r\n", 1)
-                parts = header.split(" ", 2)
-                if len(parts) < 3 or parts[0] != "HTTP/1.1":
-                    on_complete.set_exception(RuntimeError("Invalid HTTP Response"))
-                    return
-                if parts[1] != "200":
-                    on_complete.set_exception(
-                        aiohttp.ClientError(
-                            f"Unable to connect to: http://{device_ip}/{command}"
-                            f" response={parts[1]} message={parts[2]}"
-                        )
-                    )
-                    return
-                _, content = full.split("\r\n\r\n", 1)
-                on_complete.set_result(content)
-
-        # The server doesn't tolerate multiple requests in flight concurrently
         try:
-            async with self._sending_lock, asyncio.timeout(Controller.REQUEST_TIMEOUT):
-                await loop.create_connection(_PostProtocol, self.device_ip, 80)
-                await on_complete
-
-            result = on_complete.result()
-        except (OSError, asyncio.TimeoutError, aiohttp.ClientError) as ex:
+            session = self._discovery_service.session
+            body = json.dumps(data).encode("latin_1")
+            async with (
+                self._sending_lock,
+                session.post(
+                    f"http://{self.device_ip}/{command}",
+                    data=body,
+                    headers={"Connection": "close"},
+                    timeout=Controller.REQUEST_TIMEOUT,
+                ) as response,
+            ):
+                if response.status != 200:
+                    raise aiohttp.ClientError(
+                        f"Unable to connect to: http://{self.device_ip}/{command}"
+                        f" response={response.status} message={response.reason}"
+                    )
+                result = await response.text(encoding="latin_1")
+        except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to controller") from ex
 
