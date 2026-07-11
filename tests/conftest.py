@@ -35,12 +35,6 @@ class MockController(Controller):
         self.sent: list[tuple[str, Any]] = []
         self._connected = True
 
-    def _check_disconnected(self) -> None:
-        if self._fail_exception:
-            raise ConnectionError(
-                "Unable to connect to the controller"
-            ) from self._fail_exception
-
     def _check_discovery_connected(self) -> None:
         if not self._connected or not self.discovery.connected:
             ex = OSError("Not Connected")
@@ -52,14 +46,19 @@ class MockController(Controller):
         self._check_discovery_connected()
         result = self.resources.get(resource)
         if result:
+            self._restored_connection()
             return deepcopy(result)
         raise ConnectionError(f"Mock resource '{resource}' not available")
 
     async def _send_command_async(self, command: str, data: Any):
         """Mock out the network IO for _send_command."""
-        self._check_disconnected()
+        if self._fail_exception:
+            raise ConnectionError(
+                "Unable to connect to the controller"
+            ) from self._fail_exception
         self._check_discovery_connected()
         self.sent.append((command, data))
+        self._restored_connection()
 
     async def change_system_state(self, state: str, value: Any) -> None:
         self.resources["SystemSettings"][state] = value

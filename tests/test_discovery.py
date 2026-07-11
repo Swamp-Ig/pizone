@@ -121,6 +121,18 @@ async def test_ip_addr_change(service):
 
 
 @pytest.mark.asyncio
+async def test_refresh_restores_connection(service):
+    """Successful refresh clears a prior connection failure."""
+    controller = service._controllers["000000001"]  # type: Controller
+    controller._failed_connection(ConnectionError("Fake connection error"))
+    assert not controller.connected
+
+    await controller._refresh_system(notify=False)
+
+    assert controller.connected
+
+
+@pytest.mark.asyncio
 async def test_disconnected_reads_return_cached_state(service):
     """Sync property reads use cached data and do not raise when disconnected."""
     controller = service._controllers["000000001"]  # type: Controller

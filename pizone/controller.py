@@ -448,6 +448,19 @@ class Controller:
             return
         self._event_coordinator.controller_disconnected(self, ex)
 
+    def _restored_connection(self) -> None:
+        """Clear a prior connection failure after successful I/O."""
+        if self._fail_exception is None:
+            return
+        self._fail_exception = None
+        if not self._initialized:
+            return
+        self._event_coordinator.controller_update(self)
+        for zone in self.zones:
+            self._event_coordinator.zone_update(self, zone)
+        self._event_coordinator.power_update(self)
+        self._event_coordinator.controller_reconnected(self)
+
     async def _retry_connection(self) -> None:
         _LOG.info(
             "Attempting to reconnect to server uid=%s ip=%s",
@@ -457,14 +470,6 @@ class Controller:
 
         try:
             await self._refresh_all(notify=False)
-
-            self._fail_exception = None
-
-            self._event_coordinator.controller_update(self)
-            for zone in self.zones:
-                self._event_coordinator.zone_update(self, zone)
-            self._event_coordinator.power_update(self)
-            self._event_coordinator.controller_reconnected(self)
         except ConnectionError:
             # Expected, just carry on.
             _LOG.warning(
@@ -484,15 +489,18 @@ class Controller:
                 ) as response,
             ):
                 try:
-                    return await response.json(content_type=None)
+                    result = await response.json(content_type=None)
                 except JSONDecodeError as ex:
                     text = await response.text()
                     if text[-4:] == "{OK}":
-                        return json.loads(text[:-4])
-                    _LOG.error('Decode error for "%s"', text, exc_info=True)
-                    raise ConnectionError(
-                        "Unable to decode response from the controller"
-                    ) from ex
+                        result = json.loads(text[:-4])
+                    else:
+                        _LOG.error('Decode error for "%s"', text, exc_info=True)
+                        raise ConnectionError(
+                            "Unable to decode response from the controller"
+                        ) from ex
+                self._restored_connection()
+                return result
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
@@ -556,7 +564,9 @@ class Controller:
             raise ConnectionError("Unable to connect to controller") from ex
 
         if len(result) >= 7 and result[:6] == "{ERROR":
+            self._restored_connection()
             raise ConnectionError(f"Server returned error state {result}")
         if len(result) >= 4 and result[-4:] == "{OK}":
             result = result[:-4]
+        self._restored_connection()
         return result
