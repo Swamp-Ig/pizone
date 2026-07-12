@@ -3,15 +3,18 @@
 import asyncio
 import logging
 from asyncio import (
+    BaseTransport,
     CancelledError,
     Condition,
     DatagramProtocol,
     DatagramTransport,
     Task,
 )
+from collections.abc import Awaitable, Coroutine, Iterator
 from contextlib import suppress
 from ipaddress import IPv4Interface
-from typing import Any
+from types import TracebackType
+from typing import Any, cast
 
 import ifaddr
 from aiohttp import ClientSession
@@ -40,10 +43,15 @@ class LogExceptions:
     def __init__(self, func: str) -> None:
         self.func = func
 
-    def __enter__(self) -> "LogExceptions":
+    def __enter__(self) -> LogExceptions:
         return self
 
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
         if exc_type:
             _LOG.error(
                 "Exception ignored when calling listener %s", self.func, exc_info=True
@@ -98,7 +106,7 @@ class DiscoveryService:
         self._pending_init: set[str] = set()
         self._disconnected: set[str] = set()
         self._listeners: list[Listener] = []
-        self._close_task: Task | None = None
+        self._close_task: Task[Any] | None = None
 
         _LOG.info("Starting discovery protocol")
         self._session = session
@@ -109,7 +117,7 @@ class DiscoveryService:
         self._scan_condition = Condition()
         self._last_rescan_time: float = 0.0
 
-        self._tasks: list[Task] = []
+        self._tasks: list[Task[Any]] = []
 
         _srv = self
 
@@ -166,15 +174,19 @@ class DiscoveryService:
 
         self._event_coordinator: Listener = _EventCoordinator()
 
-    # Async context manager interface
-    async def __aenter__(self) -> "DiscoveryService":
+    async def __aenter__(self) -> DiscoveryService:
         await self.start_discovery()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         await self.close()
 
-    def _task_done_callback(self, task: Task) -> None:
+    def _task_done_callback(self, task: Task[Any]) -> None:
         try:
             if task.exception():
                 _LOG.exception("Uncaught exception", exc_info=task.exception())
@@ -182,16 +194,14 @@ class DiscoveryService:
             pass
         self._tasks.remove(task)
 
-    # managing the task list.
-    def create_task(self, coro: Any) -> Task:
+    def create_task(self, coro: Coroutine[Any, Any, Any]) -> Task[Any]:
         """Create a tracked task in the current event loop."""
-        task: Task = asyncio.get_running_loop().create_task(coro)
+        task = asyncio.get_running_loop().create_task(coro)
         self._tasks.append(task)
 
         task.add_done_callback(self._task_done_callback)
         return task
 
-    # Listeners.
     def add_listener(self, listener: Listener) -> None:
         """Register a listener for controller and zone events.
 
@@ -214,7 +224,6 @@ class DiscoveryService:
         """
         self._listeners.remove(listener)
 
-    # Non-context versions of starting.
     async def start_discovery(self) -> None:
         """Start the UDP discovery protocol and scan loop.
 
@@ -230,8 +239,8 @@ class DiscoveryService:
 
         class _UDPTransport(DatagramProtocol):
             # pylint: disable=protected-access
-            def connection_made(self, transport: DatagramTransport) -> None:  # type: ignore
-                _svc._on_connection_made(transport)
+            def connection_made(self, transport: BaseTransport) -> None:
+                _svc._on_connection_made(cast(DatagramTransport, transport))
 
             def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
                 _svc._on_datagram_received(data, addr)
@@ -248,7 +257,6 @@ class DiscoveryService:
             allow_broadcast=True,
         )
 
-    # Private callbacks invoked by _UDPTransport.
     def _on_connection_made(self, transport: DatagramTransport) -> None:
         if self._close_task:
             transport.close()
@@ -258,7 +266,7 @@ class DiscoveryService:
         self._transport = transport
         self.create_task(self._scan_loop())
 
-    def _get_broadcasts(self) -> Any:
+    def _get_broadcasts(self) -> Iterator[str]:
         for adapter in ifaddr.get_adapters():
             for ip in adapter.ips:
                 if not isinstance(ip.ip, str):
@@ -319,7 +327,7 @@ class DiscoveryService:
         ready = asyncio.Event()
 
         class _WaitForUidListener(Listener):
-            def controller_discovered(self, ctrl: Controller) -> None:  # noqa: N805
+            def controller_discovered(self, ctrl: Controller) -> None:
                 if ctrl.device_uid == uid:
                     ready.set()
 
@@ -358,7 +366,6 @@ class DiscoveryService:
         await asyncio.sleep(timeout)
         return dict(self._controllers)
 
-    # Closing the connection
     async def close(self) -> None:
         """Stop discovery, close the UDP transport, and cancel tracked tasks."""
         if self._close_task:
@@ -391,7 +398,7 @@ class DiscoveryService:
         return self._close_task is not None
 
     @property
-    def session(self) -> Any:
+    def session(self) -> ClientSession | None:
         """Return the aiohttp session used for HTTP requests."""
         return self._session
 
@@ -404,7 +411,7 @@ class DiscoveryService:
                 return ctrl
         return None
 
-    async def _wrap_update(self, coro: Any) -> None:
+    async def _wrap_update(self, coro: Awaitable[None]) -> None:
         """Run a controller refresh coroutine and log connection failures."""
         try:
             await coro
@@ -421,9 +428,8 @@ class DiscoveryService:
 
     def _process_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if data in (DISCOVERY_MSG, CHANGED_SCHEDULES):
-            # ignore
-            pass
-        elif data == CHANGED_SYSTEM:
+            return
+        if data == CHANGED_SYSTEM:
             ctrl = self._find_by_addr(addr)
             if ctrl:
                 # pylint: disable=protected-access
@@ -454,9 +460,6 @@ class DiscoveryService:
             if device_uid in self._pending_init:
                 return
 
-            # Create new controller.
-            # We don't have to set the loop here since it's set for
-            # the thread already.
             is_v2 = len(message) >= 4 and "iZoneV2" in message[3:]
             is_ipower = len(message) >= 4 and "iPower" in message[3:]
             controller = self._create_controller(
@@ -468,7 +471,7 @@ class DiscoveryService:
             async def initialize_controller() -> None:
                 try:
                     try:
-                        await controller._initialize()  # noqa: E501
+                        await controller._initialize()
                     except ConnectionError as ex:
                         _LOG.warning(
                             "Can't connect to discovered server at IP '%s' exception: %s",

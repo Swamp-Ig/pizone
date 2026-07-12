@@ -7,8 +7,7 @@ import json
 import logging
 from asyncio import Condition, Lock
 from enum import Enum
-from json.decoder import JSONDecodeError
-from typing import TYPE_CHECKING, Any, Dict, Union
+from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 
@@ -58,8 +57,8 @@ class Controller:
         TOP = "top"
         AUTO = "auto"
 
-    DictValue = Union[str, int, float]
-    ControllerData = Dict[str, DictValue]
+    DictValue = str | int | float
+    ControllerData = dict[str, DictValue]
 
     REQUEST_TIMEOUT = 10
     """Time to wait for a response from the device, in seconds."""
@@ -208,7 +207,7 @@ class Controller:
         return self._is_v2
 
     @property
-    def discovery(self) -> Any:
+    def discovery(self) -> DiscoveryService:
         """Discovery service for this controller."""
         return self._discovery_service
 
@@ -226,7 +225,7 @@ class Controller:
         await self._set_system_state("SysOn", "SystemON", "on" if value else "off")
 
     @property
-    def mode(self) -> "Mode":
+    def mode(self) -> Mode:
         """System mode (cooling, heating, etc.).
 
         Raises:
@@ -255,7 +254,7 @@ class Controller:
             await self._set_system_state("SysMode", "SystemMODE", value.value)
 
     @property
-    def fan(self) -> "Fan":
+    def fan(self) -> Fan:
         """The current fan level.
 
         Raises:
@@ -392,7 +391,7 @@ class Controller:
         ``zones``: the AC unit is controlled from a CTS that is automatically
         selected based on the heating or cooling need of the zones.
         """
-        return self._get_system_state("RAS")
+        return cast(str, self._get_system_state("RAS"))
 
     @property
     def zone_ctrl(self) -> int:
@@ -417,7 +416,7 @@ class Controller:
     @property
     def zones_const(self) -> int:
         """Number of constant zones the system is configured for."""
-        return self._get_system_state("NoOfConst")
+        return int(self._get_system_state("NoOfConst"))
 
     @property
     def sys_type(self) -> str:
@@ -429,7 +428,7 @@ class Controller:
         ``210``: zone control only; zones may be temperature controlled.
         ``310``: zone control and unit control.
         """
-        return self._get_system_state("SysType")
+        return cast(str, self._get_system_state("SysType"))
 
     async def _refresh_all(self, notify: bool = True) -> None:
         """Refresh system, power, and zone data from the device.
@@ -521,15 +520,15 @@ class Controller:
         if self._fail_exception:
             self._discovery_service.create_task(self._retry_connection())
 
-    def _get_system_state(self, state: str) -> Any:
-        return self._system_settings.get(state)
+    def _get_system_state(self, state: str) -> DictValue:
+        return self._system_settings[state]
 
     async def _set_system_state(
         self,
         state: str,
         command: str,
         value: DictValue,
-        send: Any | None = None,
+        send: DictValue | None = None,
     ) -> None:
         """Send a system command and update the local cache.
 
@@ -615,7 +614,7 @@ class Controller:
                     )
                 try:
                     result = await response.json(content_type=None)
-                except JSONDecodeError as ex:
+                except json.JSONDecodeError as ex:
                     text = await response.text()
                     if text[-4:] == "{OK}":
                         result = json.loads(text[:-4])
@@ -630,7 +629,9 @@ class Controller:
             self._failed_connection(ex)
             raise ConnectionError("Unable to connect to the controller") from ex
 
-    async def _send_command_async(self, command: str, data: Any) -> str:
+    async def _send_command_async(
+        self, command: str, data: dict[str, Any]
+    ) -> str:
         """Send a command to the device via HTTP POST.
 
         Raises:

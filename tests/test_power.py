@@ -1,9 +1,12 @@
+"""Tests for iPower configuration and status handling."""
+
 # pylint: disable=protected-access
 import json
+from typing import Any, cast
 
 import pytest
 
-from pizone import Power
+from pizone import Controller, Power
 
 
 class MockPowerController:
@@ -11,13 +14,13 @@ class MockPowerController:
 
     def __init__(self, responses: dict[int, dict[str, object]]) -> None:
         self._responses = responses
-        self.sent: list[tuple[str, dict[str, object]]] = []
+        self.sent: list[tuple[str, dict[str, Any]]] = []
 
     async def _send_command_async(
-        self, command: str, data: dict[str, object]
+        self, command: str, data: dict[str, Any]
     ) -> str:
         self.sent.append((command, data))
-        req_type = data["PowerRequest"]["Type"]  # type: ignore[index]
+        req_type: int = data["PowerRequest"]["Type"]
         return json.dumps(self._responses[req_type])
 
 
@@ -96,10 +99,10 @@ async def test_power_init_and_status_last_reading() -> None:
             2: {"PowerMonitorStatus": POWER_STATUS},
         }
     )
-    power = Power(controller)
+    power = Power(cast(Controller, controller))
 
     await power.init()
-    assert power.enabled == 1
+    assert power.enabled is True
     assert power.voltage == 240
     assert power.groups is not None
     assert len(power.groups) == 1
@@ -120,7 +123,7 @@ async def test_power_refresh_updates_status_last_reading() -> None:
             2: {"PowerMonitorStatus": {**POWER_STATUS, "LastReadingNo": 395}},
         }
     )
-    power = Power(controller)
+    power = Power(cast(Controller, controller))
     power._status = {"LastReadingNo": 394}
 
     changed = await power.refresh()

@@ -1,17 +1,24 @@
+"""Tests for discovery, controller refresh, and reconnect behavior."""
+
 # pylint: disable=protected-access
 from asyncio import sleep
-from unittest.mock import patch
+from types import TracebackType
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import ClientSession
 from pytest import raises
 
 from pizone import Controller, ControllerCommandError, Listener, Zone, discovery
 from pizone.discovery import DiscoveryService
 
+from .conftest import MockController, MockDiscoveryService
+
 
 @pytest.mark.asyncio
 @patch.object(DiscoveryService, "_get_broadcasts")
-async def test_broadcast(broadcasts):
+async def test_broadcast(broadcasts: MagicMock) -> None:
     broadcasts.return_value = []
 
     async with discovery():
@@ -20,14 +27,14 @@ async def test_broadcast(broadcasts):
 
 @pytest.mark.asyncio
 @patch.object(DiscoveryService, "_send_broadcasts")
-async def test_messages_sent(send_broadcasts):
+async def test_messages_sent(send_broadcasts: MagicMock) -> None:
     async with discovery():
         assert send_broadcasts.called
 
 
 @pytest.mark.asyncio
 @patch.object(DiscoveryService, "_send_broadcasts")
-async def test_rescan(send):
+async def test_rescan(send: MagicMock) -> None:
     async with discovery() as service:
         assert not service.is_closed
         assert send.call_count == 1
@@ -40,14 +47,8 @@ async def test_rescan(send):
 
 
 @pytest.mark.asyncio
-async def test_fail_on_connect(caplog):
-    from .conftest import MockDiscoveryService
-
-    async def start_discovery_noop():
-        pass
-
+async def test_fail_on_connect(caplog: pytest.LogCaptureFixture) -> None:
     service = MockDiscoveryService()
-    service._start_discovery = start_discovery_noop
     service.connected = False
 
     async with service:
@@ -63,8 +64,10 @@ async def test_fail_on_connect(caplog):
 
 
 @pytest.mark.asyncio
-async def test_connection_lost(service, caplog):
-    service._on_connection_lost(IOError("Nonspecific"))
+async def test_connection_lost(
+    service: MockDiscoveryService, caplog: pytest.LogCaptureFixture
+) -> None:
+    service._on_connection_lost(OSError("Nonspecific"))
     await sleep(0)
 
     assert len(caplog.messages) == 1
@@ -74,11 +77,11 @@ async def test_connection_lost(service, caplog):
 
 
 @pytest.mark.asyncio
-async def test_discovery(service):
+async def test_discovery(service: MockDiscoveryService) -> None:
     assert len(service._controllers) == 1
     assert "000000001" in service._controllers
 
-    controller = service._controllers["000000001"]  # type: Controller
+    controller = cast(MockController, service._controllers["000000001"])
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
     assert controller.mode == Controller.Mode.HEAT
@@ -89,13 +92,13 @@ async def test_discovery(service):
 
 
 @pytest.mark.asyncio
-async def test_legacy_discovery(legacy_service):
+async def test_legacy_discovery(legacy_service: MockDiscoveryService) -> None:
     service = legacy_service
 
     assert len(service._controllers) == 1
     assert "000000001" in service._controllers
 
-    controller = service._controllers["000000001"]  # type: Controller
+    controller = cast(MockController, service._controllers["000000001"])
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
     assert controller.mode == Controller.Mode.HEAT
@@ -106,9 +109,9 @@ async def test_legacy_discovery(legacy_service):
 
 
 @pytest.mark.asyncio
-async def test_ip_addr_change(service):
+async def test_ip_addr_change(service: MockDiscoveryService) -> None:
     """Verify that IP address changes are handled."""
-    controller = service._controllers["000000001"]  # type: ignore[attr-defined]  # type: Controller
+    controller = cast(MockController, service._controllers["000000001"])
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
 
@@ -121,9 +124,11 @@ async def test_ip_addr_change(service):
 
 
 @pytest.mark.asyncio
-async def test_refresh_zones_supports_zone_extender_group(service):
+async def test_refresh_zones_supports_zone_extender_group(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that zones 13 and 14 are fetched from the extender endpoint."""
-    controller = service._controllers["000000001"]  # type: Controller
+    controller = cast(MockController, service._controllers["000000001"])
     controller.resources["SystemSettings"]["NoOfZones"] = 14
     controller._system_settings["NoOfZones"] = 14
     controller.resources["Zones13_14"] = [
@@ -171,9 +176,9 @@ async def test_refresh_zones_supports_zone_extender_group(service):
 
 
 @pytest.mark.asyncio
-async def test_refresh_restores_connection(service):
+async def test_refresh_restores_connection(service: MockDiscoveryService) -> None:
     """Successful refresh clears a prior connection failure."""
-    controller = service._controllers["000000001"]  # type: Controller
+    controller = cast(MockController, service._controllers["000000001"])
     controller._failed_connection(ConnectionError("Fake connection error"))
     assert not controller.connected
 
@@ -183,9 +188,11 @@ async def test_refresh_restores_connection(service):
 
 
 @pytest.mark.asyncio
-async def test_disconnected_reads_return_cached_state(service):
+async def test_disconnected_reads_return_cached_state(
+    service: MockDiscoveryService,
+) -> None:
     """Sync property reads use cached data and do not raise when disconnected."""
-    controller = service._controllers["000000001"]  # type: Controller
+    controller = cast(MockController, service._controllers["000000001"])
     assert controller.mode == Controller.Mode.HEAT
 
     controller._failed_connection(ConnectionError("Fake connection error"))
@@ -199,8 +206,10 @@ async def test_disconnected_reads_return_cached_state(service):
 
 
 @pytest.mark.asyncio
-async def test_reconnect(service, caplog):
-    controller = service._controllers["000000001"]  # type: Controller
+async def test_reconnect(
+    service: MockDiscoveryService, caplog: pytest.LogCaptureFixture
+) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
     assert controller.device_uid == "000000001"
     assert controller.mode == Controller.Mode.HEAT
 
@@ -224,10 +233,10 @@ async def test_reconnect(service, caplog):
 
 
 @pytest.mark.asyncio
-async def test_reconnect_listener(service):
-    controller = service._controllers["000000001"]  # type: Controller
+async def test_reconnect_listener(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
 
-    calls = []
+    calls: list[tuple[str, Controller] | tuple[str, Controller, Exception]] = []
 
     class TestListener(Listener):
         def controller_discovered(self, ctrl: Controller) -> None:
@@ -266,7 +275,7 @@ async def test_reconnect_listener(service):
         b"ASPort_12107,Mac_000000002,IP_8.8.8.4,iZone,iLight,iDrate", ("8.8.8.8", 12107)
     )
     await sleep(0.1)
-    controller2 = service._controllers["000000002"]  # type: Controller
+    controller2 = cast(MockController, service._controllers["000000002"])
 
     assert len(calls) == 4
     assert calls[-1] == ("discovered", controller2)
@@ -281,24 +290,24 @@ async def test_reconnect_listener(service):
 
 
 @pytest.mark.asyncio
-async def test_rescan_cooldown_suppression(service):
+async def test_rescan_cooldown_suppression(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that rescan is suppressed within the cool-down window."""
-    from unittest.mock import AsyncMock
+    with patch.object(
+        service, "_rescan", AsyncMock(side_effect=service._rescan)
+    ) as rescan:
+        await service.fetch_controllers(timeout=0.1)
+        assert rescan.call_count == 1
 
-    original_rescan = service._rescan
-    service._rescan = AsyncMock(side_effect=original_rescan)
-
-    # First fetch_controllers with timeout should trigger rescan
-    await service.fetch_controllers(timeout=0.1)
-    assert service._rescan.call_count == 1
-
-    # Immediate second fetch within cool-down should not trigger new rescan
-    await service.fetch_controllers(timeout=0.1)
-    assert service._rescan.call_count == 1  # Still 1, not 2
+        await service.fetch_controllers(timeout=0.1)
+        assert rescan.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_fetch_controller_already_known(service):
+async def test_fetch_controller_already_known(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that fetch_controller returns immediately for known controller."""
     controller = await service.fetch_controller("000000001", timeout=1.0)
     assert controller is not None
@@ -306,21 +315,27 @@ async def test_fetch_controller_already_known(service):
 
 
 @pytest.mark.asyncio
-async def test_fetch_controller_unknown_no_timeout(service):
+async def test_fetch_controller_unknown_no_timeout(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that fetch_controller returns None for unknown controller without timeout."""
     controller = await service.fetch_controller("unknown_uid")
     assert controller is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_controller_unknown_timeout_expires(service):
+async def test_fetch_controller_unknown_timeout_expires(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that fetch_controller returns None when timeout expires."""
     controller = await service.fetch_controller("unknown_uid", timeout=0.1)
     assert controller is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_controllers_no_timeout(service):
+async def test_fetch_controllers_no_timeout(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that fetch_controllers returns snapshot without timeout."""
     controllers = await service.fetch_controllers()
     assert len(controllers) == 1
@@ -328,7 +343,9 @@ async def test_fetch_controllers_no_timeout(service):
 
 
 @pytest.mark.asyncio
-async def test_fetch_controllers_with_timeout(service):
+async def test_fetch_controllers_with_timeout(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that fetch_controllers waits when timeout is specified."""
     controllers = await service.fetch_controllers(timeout=0.1)
     assert len(controllers) == 1
@@ -336,7 +353,9 @@ async def test_fetch_controllers_with_timeout(service):
 
 
 @pytest.mark.asyncio
-async def test_listener_controller_discovered_on_add(service):
+async def test_listener_controller_discovered_on_add(
+    service: MockDiscoveryService,
+) -> None:
     """Verify that listener receives existing controllers on add."""
     calls = []
 
@@ -355,10 +374,6 @@ async def test_listener_controller_discovered_on_add(service):
 
 @pytest.mark.asyncio
 async def test_failed_init_deduplicated() -> None:
-    from unittest.mock import AsyncMock
-
-    from .conftest import MockDiscoveryService
-
     service = MockDiscoveryService()
     initialize = AsyncMock(side_effect=ConnectionError("init failed"))
 
@@ -380,12 +395,18 @@ class _FakeHttpResponse:
         self._body = body
 
     async def text(self, encoding: str | None = None) -> str:
+        del encoding
         return self._body
 
-    async def __aenter__(self) -> "_FakeHttpResponse":
+    async def __aenter__(self) -> _FakeHttpResponse:
         return self
 
-    async def __aexit__(self, *args: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         return None
 
 
@@ -393,7 +414,7 @@ class _FakeHttpSession:
     def __init__(self, response: _FakeHttpResponse) -> None:
         self._response = response
 
-    def post(self, *args: object, **kwargs: object) -> _FakeHttpResponse:
+    def post(self, *_args: object, **_kwargs: object) -> _FakeHttpResponse:
         return self._response
 
     async def close(self) -> None:
@@ -401,7 +422,9 @@ class _FakeHttpSession:
 
 
 @pytest.mark.asyncio
-async def test_send_command_error_body_restores_connection(service) -> None:
+async def test_send_command_error_body_restores_connection(
+    service: MockDiscoveryService,
+) -> None:
     controller = Controller(
         service,
         service._event_coordinator,
@@ -413,8 +436,9 @@ async def test_send_command_error_body_restores_connection(service) -> None:
     controller._initialized = True
     controller._failed_connection(ConnectionError("Fake connection error"))
     original_session = service._session
-    service._session = _FakeHttpSession(
-        _FakeHttpResponse(200, "{ERROR:notImplementedYet")
+    service._session = cast(
+        ClientSession,
+        _FakeHttpSession(_FakeHttpResponse(200, "{ERROR:notImplementedYet")),
     )
     try:
         with raises(ControllerCommandError):
@@ -428,7 +452,9 @@ async def test_send_command_error_body_restores_connection(service) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_command_http_404_restores_connection(service) -> None:
+async def test_send_command_http_404_restores_connection(
+    service: MockDiscoveryService,
+) -> None:
     controller = Controller(
         service,
         service._event_coordinator,
@@ -440,7 +466,10 @@ async def test_send_command_http_404_restores_connection(service) -> None:
     controller._initialized = True
     controller._failed_connection(ConnectionError("Fake connection error"))
     original_session = service._session
-    service._session = _FakeHttpSession(_FakeHttpResponse(404, "404: File not found"))
+    service._session = cast(
+        ClientSession,
+        _FakeHttpSession(_FakeHttpResponse(404, "404: File not found")),
+    )
     try:
         with raises(ControllerCommandError):
             await controller._send_command_async("NoSuchCommand", {"NoSuchCommand": "x"})
@@ -451,7 +480,9 @@ async def test_send_command_http_404_restores_connection(service) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_command_error_fires_reconnected_listener(service) -> None:
+async def test_send_command_error_fires_reconnected_listener(
+    service: MockDiscoveryService,
+) -> None:
     calls: list[tuple[str, Controller]] = []
 
     class TestListener(Listener):
@@ -470,8 +501,9 @@ async def test_send_command_error_fires_reconnected_listener(service) -> None:
     service.add_listener(TestListener())
     controller._failed_connection(ConnectionError("Fake connection error"))
     original_session = service._session
-    service._session = _FakeHttpSession(
-        _FakeHttpResponse(200, "{ERROR:notImplementedYet")
+    service._session = cast(
+        ClientSession,
+        _FakeHttpSession(_FakeHttpResponse(200, "{ERROR:notImplementedYet")),
     )
     try:
         with raises(ControllerCommandError):

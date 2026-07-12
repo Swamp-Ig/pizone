@@ -1,3 +1,5 @@
+"""Representative iZone responses used by the test suite."""
+
 SYSTEMS = {
     "000000001": {
         "SystemSettings": {

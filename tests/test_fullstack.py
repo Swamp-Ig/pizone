@@ -1,32 +1,37 @@
-"""Test for controller"""
+"""Hardware tests for a live iZone controller."""
 
-from asyncio import Event, TimeoutError, wait_for
+from asyncio import Event, wait_for
+
+from pytest import mark, raises
 
 from pizone import Controller, Listener, Zone, discovery
-from pytest import mark, raises
 
 
 class ListenerTesting(Listener):
+    """Track discovery and update callbacks from a live controller."""
+
     def __init__(self) -> None:
-        self._controller = None
+        self._controller: Controller | None = None
         self._connected = Event()
         self._updated = Event()
         self.connect_count = 0
         self.update_count = 0
 
-    def controller_discovered(self, _ctrl):
+    def controller_discovered(self, ctrl: Controller) -> None:
         if self._controller is not None:
             return
-        self._controller = _ctrl
+        self._controller = ctrl
         self._connected.set()
         self.connect_count += 1
 
-    def controller_disconnected(self, ctrl, ex):
+    def controller_disconnected(
+        self, ctrl: Controller, ex: Exception
+    ) -> None:
         if self._controller is not ctrl:
             return
         self._connected.clear()
 
-    def controller_reconnected(self, ctrl):
+    def controller_reconnected(self, ctrl: Controller) -> None:
         if self._controller is not ctrl:
             return
         self._connected.set()
@@ -38,23 +43,22 @@ class ListenerTesting(Listener):
         self.update_count += 1
         self._updated.set()
 
-    async def await_controller(self):
+    async def await_controller(self) -> Controller:
         await wait_for(self._connected.wait(), 5)
+        assert self._controller is not None
         return self._controller
 
-    async def await_update(self):
+    async def await_update(self) -> None:
         self._updated.clear()
         await wait_for(self._updated.wait(), 10)
 
 
-def dump_data(ctrl):
+def dump_data(ctrl: Controller) -> None:
     """Testing"""
     print(ctrl.device_ip)
     print(ctrl.device_uid)
-    print(
-        "supply={0} mode={1} isOn={2}".format(ctrl.temp_supply, ctrl.mode, ctrl.is_on)
-    )
-    print("sleep_timer={0}".format(ctrl.sleep_timer))
+    print(f"supply={ctrl.temp_supply} mode={ctrl.mode} isOn={ctrl.is_on}")
+    print(f"sleep_timer={ctrl.sleep_timer}")
 
     for zone in ctrl.zones:
         zone_target = (
@@ -76,7 +80,7 @@ def dump_data(ctrl):
 
 
 @mark.hardware
-async def test_full_stack():
+async def test_full_stack() -> None:
     listener = ListenerTesting()
 
     async with discovery(listener):
@@ -147,7 +151,7 @@ async def test_full_stack():
 
 
 @mark.hardware
-async def test_reconnect():
+async def test_reconnect() -> None:
     listener = ListenerTesting()
 
     async with discovery(listener):
@@ -170,7 +174,7 @@ async def test_reconnect():
 
 
 @mark.hardware
-async def test_power():
+async def test_power() -> None:
     listener = ListenerTesting()
 
     async with discovery(listener):

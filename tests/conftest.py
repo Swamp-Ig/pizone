@@ -1,47 +1,51 @@
-# pylint: disable=protected-access
+"""Shared test fixtures and network-free controller doubles."""
+
 # pylint: disable=protected-access
 from asyncio import Event, wait_for
+from collections.abc import AsyncIterator
 from copy import deepcopy
-from typing import Any
-from unittest.mock import AsyncMock
+from typing import Any, cast
 
 import pytest
 
 from pizone import Controller, Listener
-from pizone.discovery import CHANGED_SYSTEM, CHANGED_ZONES, DiscoveryService
+from pizone.discovery import DiscoveryService
+
+from .resources import SYSTEMS
 
 
 class MockController(Controller):
+    """Controller double backed by static response dictionaries."""
+
     def __init__(
         self,
-        service,
-        event_coordinator,
+        discovery_service: DiscoveryService,
+        event_coordinator: Listener,
         device_uid: str,
         device_ip: str,
         is_v2: bool,
         is_ipower: bool,
     ) -> None:
         super().__init__(
-            service,
+            discovery_service,
             event_coordinator,
             device_uid=device_uid,
             device_ip=device_ip,
             is_v2=is_v2,
             is_ipower=is_ipower,
         )
-        from .resources import SYSTEMS
-
         self.resources = deepcopy(SYSTEMS[device_uid])  # type: dict[str, Any]
         self.sent: list[tuple[str, Any]] = []
         self._connected = True
 
     def _check_discovery_connected(self) -> None:
-        if not self._connected or not self.discovery.connected:
+        service = cast(MockDiscoveryService, self.discovery)
+        if not self._connected or not service.connected:
             ex = OSError("Not Connected")
             self._failed_connection(ex)
             raise ConnectionError("Explicitly Disconnected") from ex
 
-    async def _get_resource(self, resource: str):
+    async def _get_resource(self, resource: str) -> Any:
         """Mock out the network IO for _get_resource."""
         self._check_discovery_connected()
         result = self.resources.get(resource)
@@ -50,7 +54,9 @@ class MockController(Controller):
             return deepcopy(result)
         raise ConnectionError(f"Mock resource '{resource}' not available")
 
-    async def _send_command_async(self, command: str, data: Any):
+    async def _send_command_async(
+        self, command: str, data: dict[str, Any]
+    ) -> str:
         """Mock out the network IO for _send_command."""
         if self._fail_exception:
             raise ConnectionError(
@@ -59,26 +65,22 @@ class MockController(Controller):
         self._check_discovery_connected()
         self.sent.append((command, data))
         self._restored_connection()
-
-    async def change_system_state(self, state: str, value: Any) -> None:
-        self.resources["SystemSettings"][state] = value
-        await self.discovery._process_datagram(CHANGED_SYSTEM, ("8.8.8.8", 12107))
-
-    async def change_zone_state(self, zone: int, state: str, value: Any) -> None:
-        idx = zone % 4
-        segment = f"Zones{zone - idx}_{zone - idx + 4}"
-        self.resources[segment][idx][state] = value
-        await self.discovery._process_datagram(CHANGED_ZONES, ("8.8.8.8", 12107))
+        return ""
 
 
 class MockDiscoveryService(DiscoveryService):
+    """Discovery service double that does not send UDP broadcasts."""
+
     def __init__(self) -> None:
         super().__init__()
-        self._send_broadcasts = AsyncMock()  # type: ignore
-        self.datagram_received = AsyncMock()  # type: ignore
-        self.connected = True
+        self.connected: bool = True
 
-    def _create_controller(self, device_uid, device_ip, is_v2, is_ipower):
+    def _send_broadcasts(self) -> None:
+        """Avoid network traffic during tests."""
+
+    def _create_controller(
+        self, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
+    ) -> MockController:
         return MockController(
             self,
             self._event_coordinator,
@@ -89,20 +91,23 @@ class MockDiscoveryService(DiscoveryService):
         )
 
 
-async def _register_mock_service(svc, datagram: str):
+async def _register_mock_service(
+    svc: MockDiscoveryService, datagram: bytes
+) -> None:
     class ListenerConnected(Listener):
         def __init__(self) -> None:
-            self._controller = None
+            self._controller: Controller | None = None
             self._connected = Event()
 
-        def controller_discovered(self, _ctrl):
+        def controller_discovered(self, ctrl: Controller) -> None:
             if self._controller is not None:
                 return
-            self._controller = _ctrl
+            self._controller = ctrl
             self._connected.set()
 
-        async def await_controller(self):
+        async def await_controller(self) -> Controller:
             await wait_for(self._connected.wait(), 5)
+            assert self._controller is not None
             return self._controller
 
     listener = ListenerConnected()
@@ -119,26 +124,26 @@ async def _register_mock_service(svc, datagram: str):
 
 
 @pytest.fixture
-async def service():
+async def service() -> AsyncIterator[MockDiscoveryService]:
     """Async fixture providing a mock discovery service with a pre-discovered controller."""
-    service = MockDiscoveryService()
+    svc = MockDiscoveryService()
 
     await _register_mock_service(
-        service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
+        svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
     )
 
-    yield service
+    yield svc
 
-    await service.close()
+    await svc.close()
 
 
 @pytest.fixture
-async def legacy_service():
+async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
     """Async fixture providing a mock discovery service with legacy discovery message."""
-    service = MockDiscoveryService()
+    svc = MockDiscoveryService()
 
-    await _register_mock_service(service, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
+    await _register_mock_service(svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
 
-    yield service
+    yield svc
 
-    await service.close()
+    await svc.close()

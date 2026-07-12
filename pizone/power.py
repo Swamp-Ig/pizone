@@ -9,7 +9,11 @@ from __future__ import annotations
 import json
 import logging
 from enum import IntEnum, unique
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .controller import Controller
 
 _LOG = logging.getLogger("pizone.power")
 
@@ -39,12 +43,12 @@ class PowerChannel:
         self._index = index
 
     @property
-    def _config(self) -> Dict[str, Any]:
+    def _config(self) -> dict[str, Any]:
         # pylint: disable=protected-access
         return self._device._config["Channels"][self._index]
 
     @property
-    def _status(self) -> Dict[str, Any]:
+    def _status(self) -> dict[str, Any]:
         # pylint: disable=protected-access
         return self._device._status["Ch"][self._index]
 
@@ -96,15 +100,15 @@ class PowerDevice:
     def __init__(self, power: Power, index: int) -> None:
         self._power = power
         self._index = index
-        self._channels = tuple(PowerChannel(self, i) for i in range(0, 3))
+        self._channels = tuple(PowerChannel(self, i) for i in range(3))
 
     @property
-    def _config(self) -> Dict[str, Any]:
+    def _config(self) -> dict[str, Any]:
         # pylint: disable=protected-access
         return self._power._config["Devices"][self._index]
 
     @property
-    def _status(self) -> Dict[str, Any]:
+    def _status(self) -> dict[str, Any]:
         # pylint: disable=protected-access
         return self._power._status["Dev"][self._index]
 
@@ -129,7 +133,7 @@ class PowerDevice:
         return BatteryLevel(self._status["Batt"])
 
     @property
-    def channels(self) -> Tuple[PowerChannel, ...]:
+    def channels(self) -> tuple[PowerChannel, ...]:
         """Channels on this device."""
         return self._channels
 
@@ -140,8 +144,7 @@ class PowerGroup:
     def __init__(self, power: Power, channels: Iterable[PowerChannel]) -> None:
         self._power = power
         self._channels = tuple(channels)
-        # get unique devices
-        devices: Set[PowerDevice] = set()
+        devices: set[PowerDevice] = set()
         for chan in channels:
             devices.add(chan.device)
         self._devices = tuple(devices)
@@ -180,13 +183,13 @@ class Power:
     but rejects the request.
     """
 
-    def __init__(self, controller: Any) -> None:
+    def __init__(self, controller: Controller) -> None:
         """Create a power monitor interface for *controller*."""
         self._controller = controller
-        self._config: Dict[str, Any] = {}
-        self._status: Dict[str, Any] = {"LastReadingNo": -1}
-        self._devices = tuple(PowerDevice(self, i) for i in range(0, 5))
-        self._groups: Tuple[PowerGroup, ...] | None = None
+        self._config: dict[str, Any] = {}
+        self._status: dict[str, Any] = {"LastReadingNo": -1}
+        self._devices = tuple(PowerDevice(self, i) for i in range(5))
+        self._groups: tuple[PowerGroup, ...] | None = None
 
     async def init(self) -> None:
         """Load power monitor configuration from the device.
@@ -197,7 +200,7 @@ class Power:
             KeyError: If the response is missing required fields.
         """
         self._config = await self._do_request(1, "PowerMonitorConfig")
-        gdict: Dict[int, List[PowerChannel]] = {}
+        gdict: dict[int, list[PowerChannel]] = {}
         for dev in self.devices:
             for chan in dev.channels:
                 if chan.group_number is not None:
@@ -215,7 +218,7 @@ class Power:
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing required fields.
         """
-        status: Dict[str, Any] = await self._do_request(2, "PowerMonitorStatus")
+        status: dict[str, Any] = await self._do_request(2, "PowerMonitorStatus")
 
         if status["LastReadingNo"] == self._status["LastReadingNo"]:
             return False
@@ -223,7 +226,7 @@ class Power:
         self._status = status
         return True
 
-    async def _do_request(self, req_type: int, result: str) -> Dict[str, Any]:
+    async def _do_request(self, req_type: int, result: str) -> dict[str, Any]:
         """Send a power monitor request to the device.
 
         Raises:
@@ -241,7 +244,7 @@ class Power:
     @property
     def enabled(self) -> bool:
         """True if the power settings are enabled."""
-        return self._config["Enabled"]
+        return bool(self._config["Enabled"])
 
     @property
     def voltage(self) -> int:
@@ -269,11 +272,11 @@ class Power:
         return self._status["LastReadingNo"]
 
     @property
-    def devices(self) -> Tuple[PowerDevice, ...]:
+    def devices(self) -> tuple[PowerDevice, ...]:
         """All known power monitor devices."""
         return self._devices
 
     @property
-    def groups(self) -> Tuple[PowerGroup, ...] | None:
+    def groups(self) -> tuple[PowerGroup, ...] | None:
         """Available power groups."""
         return self._groups

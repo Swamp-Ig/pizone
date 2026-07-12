@@ -5,7 +5,10 @@ Properties for reading and setting zone data.
 """
 
 from enum import Enum
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from .controller import Controller
 
 
 class Zone:
@@ -48,10 +51,10 @@ class Zone:
         CLOSE = "close"
         AUTO = "auto"
 
-    DictValue = Union[str, int, float]
-    ZoneData = Dict[str, DictValue]
+    DictValue = str | int | float
+    ZoneData = dict[str, DictValue]
 
-    def __init__(self, controller: Any, index: int) -> None:
+    def __init__(self, controller: Controller, index: int) -> None:
         self._zone_data: Zone.ZoneData = {}
         self._index = index
         self._controller = controller
@@ -64,10 +67,10 @@ class Zone:
     @property
     def name(self) -> str:
         """Zone name."""
-        return self._get_zone_state("Name")
+        return cast(str, self._get_zone_state("Name"))
 
     @property
-    def type(self) -> "Zone.Type":
+    def type(self) -> Zone.Type:
         """Zone type.
 
         Raises:
@@ -76,7 +79,7 @@ class Zone:
         return self.Type(self._get_zone_state("Type"))
 
     @property
-    def mode(self) -> "Zone.Mode":
+    def mode(self) -> Zone.Mode:
         """Current zone mode.
 
         Raises:
@@ -87,22 +90,22 @@ class Zone:
     @property
     def temp_setpoint(self) -> float | None:
         """Temperature setpoint in degrees C."""
-        return self._get_zone_state("SetPoint") or None
+        return float(self._get_zone_state("SetPoint")) or None
 
     @property
     def temp_current(self) -> float | None:
         """Current zone temperature."""
-        return self._get_zone_state("Temp") or None
+        return float(self._get_zone_state("Temp")) or None
 
     @property
     def airflow_max(self) -> int:
         """Maximum allowed airflow for the zone as a percent."""
-        return self._get_zone_state("MaxAir")
+        return cast(int, self._get_zone_state("MaxAir"))
 
     @property
     def airflow_min(self) -> int:
         """Minimum allowed airflow for the zone as a percent."""
-        return self._get_zone_state("MinAir")
+        return cast(int, self._get_zone_state("MinAir"))
 
     async def set_airflow_min(self, value: int) -> None:
         """Change the zone minimum airflow in 5% increments.
@@ -159,7 +162,7 @@ class Zone:
         self._zone_data["SetPoint"] = value
         self._fire_listeners()
 
-    async def set_mode(self, value: "Zone.Mode") -> None:
+    async def set_mode(self, value: Zone.Mode) -> None:
         """Set the current zone mode.
 
         Raises:
@@ -176,7 +179,7 @@ class Zone:
             self._zone_data["Mode"] = value.value
         self._fire_listeners()
 
-    def _update_zone(self, zone_data: "Zone.ZoneData", notify: bool = True) -> None:
+    def _update_zone(self, zone_data: Zone.ZoneData, notify: bool = True) -> None:
         """Replace cached zone data from a device refresh.
 
         Raises:
@@ -192,10 +195,10 @@ class Zone:
         # pylint: disable=protected-access
         self._controller._event_coordinator.zone_update(self._controller, self)
 
-    def _get_zone_state(self, state: str) -> Any:
-        return self._zone_data.get(state)
+    def _get_zone_state(self, state: str) -> DictValue:
+        return self._zone_data[state]
 
-    async def _send_command(self, command: str, data: Union[str, float, int]) -> None:
+    async def _send_command(self, command: str, data: str | float | int) -> None:
         """Send a zone command via the parent controller.
 
         Raises:
