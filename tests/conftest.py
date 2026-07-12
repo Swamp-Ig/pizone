@@ -1,6 +1,7 @@
 """Shared test fixtures and network-free controller doubles."""
 
 # pylint: disable=protected-access
+import json
 from asyncio import Event, wait_for
 from collections.abc import AsyncIterator
 from copy import deepcopy
@@ -11,7 +12,20 @@ import pytest
 from pizone import Controller, Listener
 from pizone.discovery import DiscoveryService
 
+from .power_data import POWER_CONFIG, POWER_STATUS
 from .resources import SYSTEMS
+
+
+def _system_data(device_uid: str) -> dict[str, Any]:
+    if device_uid in SYSTEMS:
+        return deepcopy(SYSTEMS[device_uid])
+    data = deepcopy(SYSTEMS["000000001"])
+    data["SystemSettings"]["AirStreamDeviceUId"] = device_uid
+    for key, value in data.items():
+        if key.startswith("Zones"):
+            for zone in value:
+                zone["AirStreamDeviceUId"] = device_uid
+    return data
 
 
 class MockController(Controller):
@@ -34,7 +48,7 @@ class MockController(Controller):
             is_v2=is_v2,
             is_ipower=is_ipower,
         )
-        self.resources = deepcopy(SYSTEMS[device_uid])  # type: dict[str, Any]
+        self.resources = _system_data(device_uid)
         self.sent: list[tuple[str, Any]] = []
         self._connected = True
 
@@ -65,6 +79,12 @@ class MockController(Controller):
         self._check_discovery_connected()
         self.sent.append((command, data))
         self._restored_connection()
+        if command == "PowerRequest":
+            req_type: int = data["PowerRequest"]["Type"]
+            if req_type == 1:
+                return json.dumps({"PowerMonitorConfig": POWER_CONFIG})
+            if req_type == 2:
+                return json.dumps({"PowerMonitorStatus": POWER_STATUS})
         return ""
 
 
@@ -143,6 +163,21 @@ async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
     svc = MockDiscoveryService()
 
     await _register_mock_service(svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
+
+    yield svc
+
+    await svc.close()
+
+
+@pytest.fixture
+async def ipower_service() -> AsyncIterator[MockDiscoveryService]:
+    """Mock discovery service with an iPower-enabled controller."""
+    svc = MockDiscoveryService()
+
+    await _register_mock_service(
+        svc,
+        b"ASPort_12107,Mac_000000003,IP_10.0.0.1,iZone,iPower",
+    )
 
     yield svc
 

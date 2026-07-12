@@ -3,7 +3,6 @@
 # pylint: disable=protected-access
 import asyncio
 from asyncio import sleep
-from types import TracebackType
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +14,7 @@ from pizone import Controller, ControllerCommandError, Listener, Zone, discovery
 from pizone.discovery import DiscoveryService
 
 from .conftest import MockController, MockDiscoveryService
+from .http_fakes import FakeHttpResponse, FakeHttpSession
 
 
 @pytest.mark.asyncio
@@ -410,37 +410,87 @@ async def test_failed_init_deduplicated() -> None:
     assert "000000002" not in service._controllers
 
 
-class _FakeHttpResponse:
-    def __init__(self, status: int, body: str = "") -> None:
-        self.status = status
-        self.reason = "Not Found" if status == 404 else "OK"
-        self._body = body
+@pytest.mark.asyncio
+async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller.resources["SystemSettings"]["SysMode"] = "cool"
+    controller._system_settings["SysMode"] = "heat"
 
-    async def text(self, encoding: str | None = None) -> str:
-        del encoding
-        return self._body
+    service._process_datagram(
+        b"iZoneChanged_System",
+        (controller.device_ip, 12107),
+    )
+    await asyncio.sleep(0)
 
-    async def __aenter__(self) -> _FakeHttpResponse:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        return None
+    assert controller.mode == Controller.Mode.COOL
 
 
-class _FakeHttpSession:
-    def __init__(self, response: _FakeHttpResponse) -> None:
-        self._response = response
+@pytest.mark.asyncio
+async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller.resources["Zones1_4"][0]["Name"] = "UPDATED"
+    controller.zones[0]._zone_data["Name"] = "LIVING"
 
-    def post(self, *_args: object, **_kwargs: object) -> _FakeHttpResponse:
-        return self._response
+    service._process_datagram(
+        b"iZoneChanged_Zones",
+        (controller.device_ip, 12107),
+    )
+    await asyncio.sleep(0.1)
 
-    async def close(self) -> None:
-        return None
+    assert controller.zones[0].name == "UPDATED"
+
+
+@pytest.mark.asyncio
+async def test_invalid_discovery_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = MockDiscoveryService()
+    await service.start_discovery()
+
+    service._process_datagram(b"not-a-discovery-message", ("10.0.0.90", 12107))
+
+    assert len(service._controllers) == 0
+    assert any("Invalid Message Received" in message for message in caplog.messages)
+
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_ipower_discovery(ipower_service: MockDiscoveryService) -> None:
+    assert "000000003" in ipower_service._controllers
+    controller = cast(MockController, ipower_service._controllers["000000003"])
+    assert controller.power is not None
+    assert controller.power.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_discovery_factory_registers_listener() -> None:
+    class TestListener(Listener):
+        def controller_discovered(self, ctrl: Controller) -> None:
+            del ctrl
+
+    listener = TestListener()
+    service = discovery(listener)
+    assert listener in service._listeners
+
+
+@pytest.mark.asyncio
+async def test_retry_connection(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._failed_connection(ConnectionError("Fake connection error"))
+    assert not controller.connected
+
+    await controller._retry_connection()
+
+    assert controller.connected is True
+
+
+class _FakeHttpResponse(FakeHttpResponse):
+    """Backward-compatible alias for discovery POST error tests."""
+
+
+class _FakeHttpSession(FakeHttpSession):
+    """Backward-compatible alias for discovery POST error tests."""
 
 
 @pytest.mark.asyncio
