@@ -79,6 +79,27 @@ class Controller:
         "var-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
     }
 
+    _FAULT_STATE_VALUES = frozenset({"error"})
+    _SYSTEM_STATE_DEFAULTS: ControllerData = {
+        "SysOn": "off",
+        "SysMode": "cool",
+        "SysFan": "auto",
+        "SleepTimer": 0,
+        "FreeAir": "disabled",
+        "Supply": "0.0",
+        "Setpoint": "0.0",
+        "Temp": "0.0",
+        "EcoLock": "false",
+        "EcoMin": "15.0",
+        "EcoMax": "30.0",
+        "RAS": "zones",
+        "CtrlZone": 0,
+        "NoOfZones": 0,
+        "NoOfConst": 0,
+        "SysType": "0",
+        "FanAuto": "disabled",
+    }
+
     def __init__(
         self,
         discovery_service: DiscoveryService,
@@ -280,14 +301,13 @@ class Controller:
 
     @property
     def mode(self) -> Mode:
-        """System mode (cooling, heating, etc.).
-
-        Raises:
-            ValueError: If the cached mode is not a valid :class:`Mode` member.
-        """
+        """System mode (cooling, heating, etc.)."""
         if self.free_air:
             return self.Mode.FREE_AIR
-        return self.Mode(self._get_system_state("SysMode"))
+        try:
+            return self.Mode(self._get_system_state("SysMode"))
+        except ValueError:
+            return self.Mode.COOL
 
     async def set_mode(self, value: Mode) -> None:
         """Set the system mode (cooling, heating, etc.).
@@ -309,12 +329,11 @@ class Controller:
 
     @property
     def fan(self) -> Fan:
-        """The current fan level.
-
-        Raises:
-            ValueError: If the cached fan mode is not a valid :class:`Fan` member.
-        """
-        return self.Fan(self._get_system_state("SysFan"))
+        """The current fan level."""
+        try:
+            return self.Fan(self._get_system_state("SysFan"))
+        except ValueError:
+            return self.Fan.AUTO
 
     async def set_fan(self, value: Fan) -> None:
         """Set the fan level.
@@ -606,7 +625,13 @@ class Controller:
         )
 
     def _get_system_state(self, state: str) -> DictValue:
-        return self._system_settings[state]
+        default = self._SYSTEM_STATE_DEFAULTS.get(state, "")
+        value = self._system_settings.get(state)
+        if value is None:
+            return default
+        if state in ("SysFan", "RAS", "SysMode") and str(value) in self._FAULT_STATE_VALUES:
+            return default
+        return value
 
     async def _set_system_state(
         self,

@@ -429,6 +429,45 @@ async def test_init_fault_disconnect_listener() -> None:
 
 
 @pytest.mark.asyncio
+async def test_init_fault_property_reads_no_crash() -> None:
+    listener = _DisconnectListener()
+    svc = MockDiscoveryService()
+    controller = MockController(
+        svc,
+        listener,
+        device_uid="000000005",
+        device_ip="10.0.0.5",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller.resources["SystemSettings"] = _fault_system_settings("000000005")
+
+    await controller._initialize()
+
+    assert controller.connected is False
+    assert controller.ras_mode == "zones"
+    assert controller.sys_type == "0"
+    assert controller.fan == Controller.Fan.AUTO
+    assert controller.mode == Controller.Mode.COOL
+    assert controller.is_on is False
+    assert controller.zones_total == 0
+
+
+@pytest.mark.asyncio
+async def test_fault_placeholder_values_in_cache_use_defaults(
+    service: MockDiscoveryService,
+) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._system_settings["SysFan"] = "error"
+    controller._system_settings["RAS"] = "error"
+    controller._system_settings["SysMode"] = "error"
+
+    assert controller.fan == Controller.Fan.AUTO
+    assert controller.ras_mode == "zones"
+    assert controller.mode == Controller.Mode.COOL
+
+
+@pytest.mark.asyncio
 async def test_both_false_on_transport_failure(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
     controller._connected = False
