@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+cd "$(dirname "$0")/.."
+uv sync --frozen --all-extras --group dev
+uv run pytest tests/ -q \
+  --cov=pizone \
+  --cov-report=term-missing:skip-covered \
+  --cov-report=html
+echo "HTML report: htmlcov/index.html"

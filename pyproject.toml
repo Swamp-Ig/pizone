@@ -34,6 +34,7 @@ test = [
   "pytest>=6.2.2",
   "pytest-aio",
   "pytest-aiohttp",
+  "pytest-cov",
 ]
 
 [dependency-groups]
@@ -41,12 +42,25 @@ test = [
   "pytest>=6.2.2",
   "pytest-aio",
   "pytest-aiohttp",
+  "pytest-cov",
 ]
 dev = [
   { include-group = "test" },
   "pylint",
   "mypy",
   "build",
+]
+
+[tool.coverage.run]
+source = ["pizone"]
+omit = ["pizone/version.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
 ]
 
 [tool.hatch.version]
