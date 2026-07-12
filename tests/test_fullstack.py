@@ -155,9 +155,8 @@ async def test_reconnect():
 
         assert listener.connect_count == 1
 
-        # test automatic reconnection
-        Controller.CONNECT_RETRY_TIMEOUT = 2
-
+        # Reconnect is driven by _refresh_address scheduling _retry_connection
+        # on the poll loop after the IP is restored.
         ctrl._ip = "bababa"  # pylint: disable=protected-access
         with raises(ConnectionError):
             await ctrl.set_sleep_timer(30)

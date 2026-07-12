@@ -131,15 +131,18 @@ class Controller:
 
         zone_count = int(self._system_settings["NoOfZones"])
         self.zones = [Zone(self, i) for i in range(zone_count)]
-        await self._refresh_zones(notify=False)
 
         if self._is_ipower:
             self._power = Power(self)
-            await self._power.init()
+            await asyncio.gather(
+                self._refresh_zones(notify=False),
+                self._power.init(),
+            )
             if self._power.enabled:
                 await self._refresh_power(notify=False)
         else:
             self._power = None
+            await self._refresh_zones(notify=False)
 
         self._initialized = True
         self._discovery_service.create_task(self._poll_loop())
@@ -433,6 +436,9 @@ class Controller:
             KeyError: If a required field is missing from a device response.
         """
         zones = int(self._system_settings["NoOfZones"])
+        # gather schedules all refresh coroutines together; _sending_lock serializes
+        # HTTP to one in-flight request per controller. Revisit the lock if firmware
+        # supports concurrent requests — gather can stay.
         await asyncio.gather(
             self._refresh_system(notify),
             self._refresh_power(notify),
