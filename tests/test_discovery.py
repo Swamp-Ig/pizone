@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from pytest import raises
 
-from pizone import Controller, Listener, Zone, discovery
+from pizone import Controller, ControllerCommandError, Listener, Zone, discovery
 from pizone.discovery import DiscoveryService
 
 
@@ -371,3 +371,114 @@ async def test_failed_init_deduplicated() -> None:
 
     assert initialize.call_count == 1
     assert "000000002" not in service._controllers
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int, body: str = "") -> None:
+        self.status = status
+        self.reason = "Not Found" if status == 404 else "OK"
+        self._body = body
+
+    async def text(self, encoding: str | None = None) -> str:
+        return self._body
+
+    async def __aenter__(self) -> "_FakeHttpResponse":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _FakeHttpSession:
+    def __init__(self, response: _FakeHttpResponse) -> None:
+        self._response = response
+
+    def post(self, *args: object, **kwargs: object) -> _FakeHttpResponse:
+        return self._response
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_send_command_error_body_restores_connection(service) -> None:
+    controller = Controller(
+        service,
+        service._event_coordinator,
+        device_uid="000000099",
+        device_ip="10.0.0.99",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._initialized = True
+    controller._failed_connection(ConnectionError("Fake connection error"))
+    original_session = service._session
+    service._session = _FakeHttpSession(
+        _FakeHttpResponse(200, "{ERROR:notImplementedYet")
+    )
+    try:
+        with raises(ControllerCommandError):
+            await controller._send_command_async(
+                "PowerRequest", {"PowerRequest": {"Type": 99, "No": 0, "No1": 0}}
+            )
+    finally:
+        service._session = original_session
+
+    assert controller.connected
+
+
+@pytest.mark.asyncio
+async def test_send_command_http_404_restores_connection(service) -> None:
+    controller = Controller(
+        service,
+        service._event_coordinator,
+        device_uid="000000099",
+        device_ip="10.0.0.99",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._initialized = True
+    controller._failed_connection(ConnectionError("Fake connection error"))
+    original_session = service._session
+    service._session = _FakeHttpSession(_FakeHttpResponse(404, "404: File not found"))
+    try:
+        with raises(ControllerCommandError):
+            await controller._send_command_async("NoSuchCommand", {"NoSuchCommand": "x"})
+    finally:
+        service._session = original_session
+
+    assert controller.connected
+
+
+@pytest.mark.asyncio
+async def test_send_command_error_fires_reconnected_listener(service) -> None:
+    calls: list[tuple[str, Controller]] = []
+
+    class TestListener(Listener):
+        def controller_reconnected(self, ctrl: Controller) -> None:
+            calls.append(("reconnected", ctrl))
+
+    controller = Controller(
+        service,
+        service._event_coordinator,
+        device_uid="000000099",
+        device_ip="10.0.0.99",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._initialized = True
+    service.add_listener(TestListener())
+    controller._failed_connection(ConnectionError("Fake connection error"))
+    original_session = service._session
+    service._session = _FakeHttpSession(
+        _FakeHttpResponse(200, "{ERROR:notImplementedYet")
+    )
+    try:
+        with raises(ControllerCommandError):
+            await controller._send_command_async(
+                "PowerRequest", {"PowerRequest": {"Type": 99, "No": 0, "No1": 0}}
+            )
+    finally:
+        service._session = original_session
+
+    assert calls[-1] == ("reconnected", controller)

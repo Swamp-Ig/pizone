@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Union
 
 import aiohttp
 
+from .exceptions import ControllerCommandError
 from .power import Power
 from .zone import Zone
 
@@ -30,9 +31,11 @@ class Controller:
     :attr:`connected` before trusting stale data.
 
     **Updating state:** async command and refresh methods perform HTTP I/O.
-    They raise :exc:`ConnectionError` when the device cannot be reached or
-    returns an invalid response. A successful request clears a prior
-    connection failure and notifies listeners via
+    They raise :exc:`ConnectionError` when the device cannot be reached.
+    They raise :exc:`~pizone.exceptions.ControllerCommandError` when the
+    device responds but rejects the request (``{ERROR...}`` body or HTTP 4xx).
+    A successful transport request clears a prior connection failure and
+    notifies listeners via
     :meth:`~pizone.discovery.Listener.controller_reconnected`.
     """
 
@@ -592,16 +595,24 @@ class Controller:
         Raises:
             ConnectionError: If the device cannot be reached, the response
                 cannot be decoded, or the HTTP request fails.
+            ControllerCommandError: If the device returns HTTP 4xx.
         """
         try:
             session = self._discovery_service.session
+            if session is None:
+                raise ConnectionError("Discovery service is not started")
             async with (
                 self._sending_lock,
                 session.get(
                     f"http://{self.device_ip}/{resource}",
-                    timeout=Controller.REQUEST_TIMEOUT,
+                    timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
                 ) as response,
             ):
+                if response.status >= 400 and response.status < 500:
+                    self._restored_connection()
+                    raise ControllerCommandError(
+                        f"HTTP {response.status} for http://{self.device_ip}/{resource}"
+                    )
                 try:
                     result = await response.json(content_type=None)
                 except JSONDecodeError as ex:
@@ -623,12 +634,14 @@ class Controller:
         """Send a command to the device via HTTP POST.
 
         Raises:
-            ConnectionError: If the device cannot be reached, returns a
-                non-200 status, returns an ``{ERROR...}`` payload, or the
-                HTTP request fails.
+            ConnectionError: If the device cannot be reached or the HTTP request fails.
+            ControllerCommandError: If the device returns HTTP 4xx or an
+                ``{ERROR...}`` payload.
         """
         try:
             session = self._discovery_service.session
+            if session is None:
+                raise ConnectionError("Discovery service is not started")
             body = json.dumps(data).encode("latin_1")
             async with (
                 self._sending_lock,
@@ -636,9 +649,14 @@ class Controller:
                     f"http://{self.device_ip}/{command}",
                     data=body,
                     headers={"Connection": "close"},
-                    timeout=Controller.REQUEST_TIMEOUT,
+                    timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
                 ) as response,
             ):
+                if response.status >= 400 and response.status < 500:
+                    self._restored_connection()
+                    raise ControllerCommandError(
+                        f"HTTP {response.status} for http://{self.device_ip}/{command}"
+                    )
                 if response.status != 200:
                     raise aiohttp.ClientError(
                         f"Unable to connect to: http://{self.device_ip}/{command}"
@@ -651,7 +669,7 @@ class Controller:
 
         if len(result) >= 7 and result[:6] == "{ERROR":
             self._restored_connection()
-            raise ConnectionError(f"Server returned error state {result}")
+            raise ControllerCommandError(f"Server returned error state {result}")
         if len(result) >= 4 and result[-4:] == "{OK}":
             result = result[:-4]
         self._restored_connection()

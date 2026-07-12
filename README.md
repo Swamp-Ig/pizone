@@ -17,7 +17,9 @@ The main entry points are `Controller` and `Zone` for device control, and
 
 Synchronous property reads return cached device data and do not raise
 `ConnectionError`. Async command and refresh methods perform HTTP I/O and
-raise `ConnectionError` when the device cannot be reached.
+raise `ConnectionError` when the device cannot be reached. They raise
+`ControllerCommandError` when the device responds but rejects the request
+(`{ERROR}` body or HTTP 4xx).
 
 ## Dependencies
 
@@ -35,6 +37,7 @@ The iZone Ethernet interface is documented in
 1. Install [uv](https://docs.astral.sh/uv/).
 2. `uv sync --all-extras --group dev`
 3. `./scripts/check` — lint, type-check, test, and build (same as CI)
+4. `./scripts/coverage` — test coverage report (advisory; not part of the CI gate)
 
 Individual commands:
 

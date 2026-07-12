@@ -175,7 +175,9 @@ class Power:
 
     **Updating state:** :meth:`init` and :meth:`refresh` perform HTTP I/O via
     the parent :class:`~pizone.controller.Controller` and raise
-    :exc:`ConnectionError` on failure.
+    :exc:`ConnectionError` on failure. They may raise
+    :exc:`~pizone.exceptions.ControllerCommandError` when the device responds
+    but rejects the request.
     """
 
     def __init__(self, controller: Any) -> None:
