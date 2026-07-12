@@ -264,7 +264,7 @@ class Power:
     @property
     def status_last_reading(self) -> int:
         """Last reading number from the device."""
-        return self._status["lastReadingNo"]
+        return self._status["LastReadingNo"]
 
     @property
     def devices(self) -> Tuple[PowerDevice, ...]:
