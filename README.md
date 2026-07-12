@@ -19,6 +19,12 @@ Synchronous property reads return cached device data and do not raise
 `ConnectionError`. Async command and refresh methods perform HTTP I/O and
 raise `ConnectionError` when the device cannot be reached.
 
+## Dependencies
+
+Requires `aiohttp>=3.14.1`. Home Assistant pins `aiohttp==3.14.1`; that version
+includes the HTTP POST coalescing fix ([aiohttp#10991](https://github.com/aio-libs/aiohttp/pull/10991))
+needed for iZone controllers that read the request in a single operation.
+
 ## Protocol documentation
 
 The iZone Ethernet interface is documented in
