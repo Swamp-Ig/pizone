@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 
-from .exceptions import ControllerCommandError
+from .exceptions import ControllerCommandError, ResponseDecodeError
 from .power import Power
 from .zone import Zone
 
@@ -716,8 +716,8 @@ class Controller:
         """Fetch a JSON resource via HTTP GET without updating connection state.
 
         Raises:
-            ConnectionError: If the device cannot be reached or the response
-                cannot be decoded.
+            ConnectionError: If the device cannot be reached.
+            ResponseDecodeError: If the response cannot be decoded as JSON.
             ControllerCommandError: If the device returns HTTP 4xx.
         """
         session = self._discovery_service.session
@@ -741,7 +741,7 @@ class Controller:
                 if text[-4:] == "{OK}":
                     return json.loads(text[:-4])
                 _LOG.error('Decode error for "%s"', text, exc_info=True)
-                raise ConnectionError(
+                raise ResponseDecodeError(
                     "Unable to decode response from the controller"
                 ) from ex
 
@@ -787,8 +787,8 @@ class Controller:
         """Fetch a JSON resource from the device via HTTP GET.
 
         Raises:
-            ConnectionError: If the device cannot be reached, the response
-                cannot be decoded, or the HTTP request fails.
+            ConnectionError: If the device cannot be reached or the HTTP request fails.
+            ResponseDecodeError: If the response cannot be decoded as JSON.
             ControllerCommandError: If the device returns HTTP 4xx.
         """
         try:
@@ -801,11 +801,11 @@ class Controller:
                 False, ConnectionError("Unable to connect to the controller")
             )
             raise ConnectionError("Unable to connect to the controller") from ex
+        except ResponseDecodeError:
+            self._set_bridge_ok(True)
+            raise
         except ConnectionError as ex:
-            if str(ex) == "Unable to decode response from the controller":
-                self._set_bridge_ok(True)
-            else:
-                self._set_bridge_ok(False, ex)
+            self._set_bridge_ok(False, ex)
             raise
         self._set_bridge_ok(True)
         return result

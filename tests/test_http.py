@@ -8,7 +8,7 @@ import pytest
 from aiohttp import ClientSession
 from pytest import raises
 
-from pizone import Controller, ControllerCommandError
+from pizone import Controller, ControllerCommandError, ResponseDecodeError
 
 from .conftest import MockDiscoveryService
 from .http_fakes import FakeHttpResponse, FakeHttpSession
@@ -98,11 +98,12 @@ async def test_get_resource_decode_failure(service: MockDiscoveryService) -> Non
         ),
     )
     try:
-        with raises(ConnectionError):
+        with raises(ResponseDecodeError):
             await controller._get_resource("SystemSettings")
     finally:
         service._session = original_session
 
+    assert controller.bridge_connected is True
     assert controller.connected is True
 
 

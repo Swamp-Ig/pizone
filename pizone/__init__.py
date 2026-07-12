@@ -8,17 +8,24 @@ Synchronous property reads return cached device data and do not raise
 raise :exc:`ConnectionError` when the device cannot be reached. They raise
 :exc:`~pizone.exceptions.ControllerCommandError` when the device responds but
 rejects the request (``{ERROR...}`` body or HTTP 4xx).
+
+Layered connection state on :class:`~pizone.controller.Controller`:
+
+- :attr:`~pizone.controller.Controller.bridge_connected` — ASH bridge HTTP transport
+- :attr:`~pizone.controller.Controller.connected` — bridge plus valid iZone AC data
+- :attr:`~pizone.power.Power.connected` — power monitor I/O (when enabled)
 """
 
 from .controller import Controller
 from .discovery import DiscoveryService, Listener, discovery
-from .exceptions import ControllerCommandError
+from .exceptions import ControllerCommandError, ResponseDecodeError
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
 from .zone import Zone
 
 __all__ = [
     "Controller",
     "ControllerCommandError",
+    "ResponseDecodeError",
     "Zone",
     "DiscoveryService",
     "Listener",
