@@ -51,6 +51,9 @@ class MockController(Controller):
         self.resources = _system_data(device_uid)
         self.sent: list[tuple[str, Any]] = []
         self._connected = True
+        self.v2_probe_response: str | None = None
+        self.power_config: dict[str, Any] | None = None
+        self.fail_power_types: set[int] = set()
 
     def _check_discovery_connected(self) -> None:
         service = cast(MockDiscoveryService, self.discovery)
@@ -69,7 +72,7 @@ class MockController(Controller):
         raise ConnectionError(f"Mock resource '{resource}' not available")
 
     async def _send_command_async(
-        self, command: str, data: dict[str, Any]
+        self, command: str, data: dict[str, Any], *, mark_disconnected: bool = True
     ) -> str:
         """Mock out the network IO for _send_command."""
         if self._fail_exception:
@@ -78,13 +81,29 @@ class MockController(Controller):
             ) from self._fail_exception
         self._check_discovery_connected()
         self.sent.append((command, data))
-        self._restored_connection()
+        if command == "iZoneRequestV2":
+            if self.v2_probe_response is not None:
+                self._restored_connection()
+                return self.v2_probe_response
+            ex = ConnectionError("V2 probe failed")
+            if mark_disconnected:
+                self._failed_connection(ex)
+            raise ConnectionError("Unable to connect to controller") from ex
         if command == "PowerRequest":
             req_type: int = data["PowerRequest"]["Type"]
+            if req_type in self.fail_power_types:
+                ex = TimeoutError("Power request failed")
+                if mark_disconnected:
+                    self._failed_connection(ex)
+                raise ConnectionError("Unable to connect to controller") from ex
             if req_type == 1:
-                return json.dumps({"PowerMonitorConfig": POWER_CONFIG})
+                config = self.power_config if self.power_config is not None else POWER_CONFIG
+                self._restored_connection()
+                return json.dumps({"PowerMonitorConfig": config})
             if req_type == 2:
+                self._restored_connection()
                 return json.dumps({"PowerMonitorStatus": POWER_STATUS})
+        self._restored_connection()
         return ""
 
 

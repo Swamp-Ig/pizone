@@ -109,7 +109,7 @@ async def test_discovery(service: MockDiscoveryService) -> None:
     assert controller.mode == Controller.Mode.HEAT
 
     await controller.set_mode(Controller.Mode.COOL)
-    assert controller.sent[0] == ("SystemMODE", {"SystemMODE": "cool"})
+    assert controller.sent[-1] == ("SystemMODE", {"SystemMODE": "cool"})
     assert controller.mode == Controller.Mode.COOL
 
 
@@ -126,7 +126,7 @@ async def test_legacy_discovery(legacy_service: MockDiscoveryService) -> None:
     assert controller.mode == Controller.Mode.HEAT
 
     await controller.set_mode(Controller.Mode.COOL)
-    assert controller.sent[0] == ("SystemMODE", {"SystemMODE": "cool"})
+    assert controller.sent[-1] == ("SystemMODE", {"SystemMODE": "cool"})
     assert controller.mode == Controller.Mode.COOL
 
 
@@ -236,6 +236,7 @@ async def test_reconnect(
     assert controller.mode == Controller.Mode.HEAT
 
     controller._failed_connection(ConnectionError("Fake connection error"))
+    controller.sent.clear()
     with raises(ConnectionError):
         await controller.set_mode(Controller.Mode.COOL)
 
@@ -251,7 +252,7 @@ async def test_reconnect(
     # Reconnect OK
     assert caplog.messages[1][:23] == "Controller reconnected:"
     await controller.set_mode(Controller.Mode.COOL)
-    assert controller.sent[0] == ("SystemMODE", {"SystemMODE": "cool"})
+    assert controller.sent[-1] == ("SystemMODE", {"SystemMODE": "cool"})
 
 
 @pytest.mark.asyncio

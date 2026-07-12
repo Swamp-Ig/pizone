@@ -19,8 +19,9 @@ class MockPowerController:
         self.sent: list[tuple[str, dict[str, Any]]] = []
 
     async def _send_command_async(
-        self, command: str, data: dict[str, Any]
+        self, command: str, data: dict[str, Any], *, mark_disconnected: bool = True
     ) -> str:
+        del mark_disconnected
         self.sent.append((command, data))
         req_type: int = data["PowerRequest"]["Type"]
         return json.dumps(self._responses[req_type])

@@ -191,15 +191,21 @@ class Power:
         self._devices = tuple(PowerDevice(self, i) for i in range(5))
         self._groups: tuple[PowerGroup, ...] | None = None
 
-    async def init(self) -> None:
+    async def init(self, *, mark_disconnected: bool = True) -> None:
         """Load power monitor configuration from the device.
+
+        Args:
+            mark_disconnected: When ``False``, connection failures during this
+                request do not mark the controller disconnected.
 
         Raises:
             ConnectionError: If the HTTP request fails.
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing required fields.
         """
-        self._config = await self._do_request(1, "PowerMonitorConfig")
+        self._config = await self._do_request(
+            1, "PowerMonitorConfig", mark_disconnected=mark_disconnected
+        )
         gdict: dict[int, list[PowerChannel]] = {}
         for dev in self.devices:
             for chan in dev.channels:
@@ -226,8 +232,14 @@ class Power:
         self._status = status
         return True
 
-    async def _do_request(self, req_type: int, result: str) -> dict[str, Any]:
+    async def _do_request(
+        self, req_type: int, result: str, *, mark_disconnected: bool = True
+    ) -> dict[str, Any]:
         """Send a power monitor request to the device.
+
+        Args:
+            mark_disconnected: When ``False``, connection failures do not mark
+                the controller disconnected.
 
         Raises:
             ConnectionError: If the HTTP request fails.
@@ -236,7 +248,9 @@ class Power:
         """
         # pylint: disable=protected-access
         datas = await self._controller._send_command_async(
-            "PowerRequest", {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}}
+            "PowerRequest",
+            {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}},
+            mark_disconnected=mark_disconnected,
         )
         data = json.loads(datas)
         return cast(dict[str, Any], data[result])

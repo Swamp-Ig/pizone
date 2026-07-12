@@ -122,7 +122,7 @@ class Controller:
         """Load system, zone, and optional power data from the device.
 
         Raises:
-            ConnectionError: If any initial HTTP request fails.
+            ConnectionError: If a required HTTP request fails.
             KeyError: If a required field is missing from a device response.
         """
         await self._refresh_system(notify=False)
@@ -131,23 +131,57 @@ class Controller:
             str(self._system_settings.get("FanAuto", "disabled"))
         ]
 
+        await self._probe_v2_api()
+
         zone_count = int(self._system_settings["NoOfZones"])
         self.zones = [Zone(self, i) for i in range(zone_count)]
 
-        if self._is_ipower:
-            self._power = Power(self)
-            await asyncio.gather(
-                self._refresh_zones(notify=False),
-                self._power.init(),
-            )
-            if self._power.enabled:
-                await self._refresh_power(notify=False)
-        else:
-            self._power = None
-            await self._refresh_zones(notify=False)
+        await self._refresh_zones(notify=False)
+
+        await self._probe_power()
 
         self._initialized = True
         self._discovery_service.create_task(self._poll_loop())
+
+    async def _probe_v2_api(self) -> None:
+        """Detect V2 API support; non-fatal on failure."""
+        try:
+            response = await self._send_command_async(
+                "iZoneRequestV2",
+                {"iZoneV2Request": {"Type": 1, "No": 0, "No1": 0}},
+                mark_disconnected=False,
+            )
+            data = json.loads(response)
+            uid = data["AirStreamDeviceUId"]
+            self._is_v2 = uid == self._device_uid and "SystemV2" in data
+        except (ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError):
+            self._is_v2 = False
+
+    async def _probe_power(self) -> None:
+        """Probe power monitor endpoint when discovery hinted iPower; non-fatal."""
+        if not self._is_ipower:
+            self._power = None
+            return
+
+        try:
+            power = Power(self)
+            await power.init(mark_disconnected=False)
+            if power.enabled:
+                self._power = power
+                return
+            _LOG.warning(
+                "Power monitor disabled on uid=%s; skipping power support",
+                self._device_uid,
+            )
+        except (ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError):
+            _LOG.warning(
+                "Power monitor probe failed for uid=%s",
+                self._device_uid,
+                exc_info=True,
+            )
+
+        self._is_ipower = False
+        self._power = None
 
     async def _poll_loop(self) -> None:
         while True:
@@ -205,6 +239,11 @@ class Controller:
     def is_v2(self) -> bool:
         """Return whether this is a v2 controller."""
         return self._is_v2
+
+    @property
+    def is_ipower(self) -> bool:
+        """Return whether power monitoring is available."""
+        return self._is_ipower
 
     @property
     def discovery(self) -> DiscoveryService:
@@ -630,9 +669,13 @@ class Controller:
             raise ConnectionError("Unable to connect to the controller") from ex
 
     async def _send_command_async(
-        self, command: str, data: dict[str, Any]
+        self, command: str, data: dict[str, Any], *, mark_disconnected: bool = True
     ) -> str:
         """Send a command to the device via HTTP POST.
+
+        Args:
+            mark_disconnected: When ``False``, transport failures do not mark
+                the controller disconnected.
 
         Raises:
             ConnectionError: If the device cannot be reached or the HTTP request fails.
@@ -665,7 +708,8 @@ class Controller:
                     )
                 result = await response.text(encoding="latin_1")
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
-            self._failed_connection(ex)
+            if mark_disconnected:
+                self._failed_connection(ex)
             raise ConnectionError("Unable to connect to controller") from ex
 
         if len(result) >= 7 and result[:6] == "{ERROR":
