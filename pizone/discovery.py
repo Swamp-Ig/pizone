@@ -95,6 +95,7 @@ class DiscoveryService:
                 omitted, the service creates and owns its own session.
         """
         self._controllers: dict[str, Controller] = {}
+        self._pending_init: set[str] = set()
         self._disconnected: set[str] = set()
         self._listeners: list[Listener] = []
         self._close_task: Task | None = None
@@ -450,6 +451,9 @@ class DiscoveryService:
 
         # pylint: disable=protected-access
         if device_uid not in self._controllers:
+            if device_uid in self._pending_init:
+                return
+
             # Create new controller.
             # We don't have to set the loop here since it's set for
             # the thread already.
@@ -459,19 +463,24 @@ class DiscoveryService:
                 device_uid, device_ip, is_v2, is_ipower
             )
 
+            self._pending_init.add(device_uid)
+
             async def initialize_controller() -> None:
                 try:
-                    await controller._initialize()  # noqa: E501
-                except ConnectionError as ex:
-                    _LOG.warning(
-                        "Can't connect to discovered server at IP '%s' exception: %s",
-                        device_ip,
-                        repr(ex),
-                    )
-                    return
+                    try:
+                        await controller._initialize()  # noqa: E501
+                    except ConnectionError as ex:
+                        _LOG.warning(
+                            "Can't connect to discovered server at IP '%s' exception: %s",
+                            device_ip,
+                            repr(ex),
+                        )
+                        return
 
-                self._controllers[device_uid] = controller
-                self._event_coordinator.controller_discovered(controller)
+                    self._controllers[device_uid] = controller
+                    self._event_coordinator.controller_discovered(controller)
+                finally:
+                    self._pending_init.discard(device_uid)
 
             self.create_task(initialize_controller())
         else:

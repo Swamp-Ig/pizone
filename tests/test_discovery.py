@@ -351,3 +351,23 @@ async def test_listener_controller_discovered_on_add(service):
     # Should have been called with the existing controller
     assert len(calls) == 1
     assert calls[0] == ("discovered", "000000001")
+
+
+@pytest.mark.asyncio
+async def test_failed_init_deduplicated() -> None:
+    from unittest.mock import AsyncMock
+
+    from .conftest import MockDiscoveryService
+
+    service = MockDiscoveryService()
+    initialize = AsyncMock(side_effect=ConnectionError("init failed"))
+
+    async with service:
+        with patch.object(Controller, "_initialize", initialize):
+            datagram = b"ASPort_12107,Mac_000000002,IP_9.9.9.9,iZone"
+            service._process_datagram(datagram, ("9.9.9.9", 12107))
+            service._process_datagram(datagram, ("9.9.9.9", 12107))
+            await sleep(0.1)
+
+    assert initialize.call_count == 1
+    assert "000000002" not in service._controllers
