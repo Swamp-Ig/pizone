@@ -13,7 +13,7 @@ from pytest import raises
 from pizone import Controller, ControllerCommandError, Listener, Zone, discovery
 from pizone.discovery import DiscoveryService
 
-from .conftest import MockController, MockDiscoveryService
+from .conftest import MockController, MockDiscoveryService, _register_mock_service
 from .http_fakes import FakeHttpResponse, FakeHttpSession
 
 
@@ -438,6 +438,24 @@ async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
     await asyncio.sleep(0.1)
 
     assert controller.zones[0].name == "UPDATED"
+
+
+@pytest.mark.asyncio
+async def test_x_ac_flag_discovery() -> None:
+    """Bridges that report X for the AC slot should still be discovered."""
+    svc = MockDiscoveryService()
+    datagram = b"ASPort_12107,Mac_000025841,IP_10.0.0.90,X,iLight,iDrate,iPower"
+
+    await _register_mock_service(svc, datagram)
+
+    assert "000025841" in svc._controllers
+    controller = cast(MockController, svc._controllers["000025841"])
+    assert controller.device_ip == "10.0.0.90"
+    assert controller.is_v2 is False
+    assert controller.power is not None
+    assert controller.power.enabled is True
+
+    await svc.close()
 
 
 @pytest.mark.asyncio

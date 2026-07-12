@@ -448,11 +448,7 @@ class DiscoveryService:
 
     def _discovery_received(self, data: bytes) -> None:
         message = data.decode().split(",")
-        if (
-            len(message) < 3
-            or message[0] != "ASPort_12107"
-            or (len(message) >= 4 and {"iZone", "iZoneV2"}.isdisjoint(message[3:]))
-        ):
+        if len(message) < 3 or message[0] != "ASPort_12107":
             _LOG.warning("Invalid Message Received: %s", data.decode())
             return
 
