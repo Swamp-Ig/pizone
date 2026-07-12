@@ -368,27 +368,31 @@ class DiscoveryService:
 
     async def close(self) -> None:
         """Stop discovery, close the UDP transport, and cancel tracked tasks."""
-        if self._close_task:
-            await self._close_task
+        current = asyncio.current_task()
+        if self._close_task and self._close_task is not current:
+            with suppress(CancelledError):
+                await self._close_task
             return
         _LOG.info("Close called on discovery service.")
-        self._close_task = asyncio.current_task()
+        self._close_task = current
         if self._transport:
             self._transport.close()
 
-        for i in self._tasks:
-            i.cancel()
+        pending = [task for task in list(self._tasks) if task is not current]
+        for task in pending:
+            task.cancel()
 
         if self._own_session and self._session:
             await self._session.close()
 
-        await asyncio.wait(self._tasks)
+        if pending:
+            await asyncio.wait(pending)
 
     def _on_connection_lost(self, exc: Exception | None) -> None:
         _LOG.debug("Connection Lost")
         if not self._close_task:
             _LOG.error("Connection Lost unexpectedly: %s", repr(exc))
-            asyncio.get_running_loop().create_task(self.close())
+            self.create_task(self.close())
 
     @property
     def is_closed(self) -> bool:

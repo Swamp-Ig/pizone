@@ -1,6 +1,7 @@
 """Tests for discovery, controller refresh, and reconnect behavior."""
 
 # pylint: disable=protected-access
+import asyncio
 from asyncio import sleep
 from types import TracebackType
 from typing import cast
@@ -73,6 +74,27 @@ async def test_connection_lost(
     assert len(caplog.messages) == 1
     assert caplog.messages[0] == "Connection Lost unexpectedly: OSError('Nonspecific')"
 
+    assert service.is_closed
+
+
+@pytest.mark.asyncio
+async def test_close_excludes_current_task() -> None:
+    """Tracked close() must not cancel or deadlock on itself."""
+    service = MockDiscoveryService()
+    await service.start_discovery()
+    close_task = service.create_task(service.close())
+    await sleep(0)
+    assert not close_task.cancelled()
+    await close_task
+    assert service.is_closed
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_idempotent() -> None:
+    """Concurrent close() calls coalesce without raising."""
+    service = MockDiscoveryService()
+    await service.start_discovery()
+    await asyncio.gather(service.close(), service.close())
     assert service.is_closed
 
 
