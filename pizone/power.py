@@ -10,7 +10,7 @@ import json
 import logging
 from enum import IntEnum, unique
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -45,12 +45,12 @@ class PowerChannel:
     @property
     def _config(self) -> dict[str, Any]:
         # pylint: disable=protected-access
-        return self._device._config["Channels"][self._index]
+        return cast(dict[str, Any], self._device._config["Channels"][self._index])
 
     @property
     def _status(self) -> dict[str, Any]:
         # pylint: disable=protected-access
-        return self._device._status["Ch"][self._index]
+        return cast(dict[str, Any], self._device._status["Ch"][self._index])
 
     @property
     def device(self) -> PowerDevice:
@@ -70,12 +70,12 @@ class PowerChannel:
     @property
     def name(self) -> str:
         """Power channel name."""
-        return self._config["Name"]
+        return cast(str, self._config["Name"])
 
     @property
     def group_number(self) -> int | None:
         """Group number, or ``None`` if not assigned."""
-        num = self._config["GrNo"]
+        num = cast(int, self._config["GrNo"])
         return num if num < 255 else None
 
     @property
@@ -91,7 +91,7 @@ class PowerChannel:
     @property
     def status_power(self) -> int:
         """Current power reading in watts."""
-        return self._status["Pwr"]
+        return cast(int, self._status["Pwr"])
 
 
 class PowerDevice:
@@ -105,12 +105,12 @@ class PowerDevice:
     @property
     def _config(self) -> dict[str, Any]:
         # pylint: disable=protected-access
-        return self._power._config["Devices"][self._index]
+        return cast(dict[str, Any], self._power._config["Devices"][self._index])
 
     @property
     def _status(self) -> dict[str, Any]:
         # pylint: disable=protected-access
-        return self._power._status["Dev"][self._index]
+        return cast(dict[str, Any], self._power._status["Dev"][self._index])
 
     @property
     def index(self) -> int:
@@ -239,7 +239,7 @@ class Power:
             "PowerRequest", {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}}
         )
         data = json.loads(datas)
-        return data[result]
+        return cast(dict[str, Any], data[result])
 
     @property
     def enabled(self) -> bool:
@@ -249,27 +249,27 @@ class Power:
     @property
     def voltage(self) -> int:
         """Power system voltage in V."""
-        return self._config["Voltage"]
+        return cast(int, self._config["Voltage"])
 
     @property
     def power_factor(self) -> int:
         """Power factor in %."""
-        return self._config["PF"]
+        return cast(int, self._config["PF"])
 
     @property
     def cost_of_power(self) -> int:
         """Cost of power in 0.01 cents per pWh."""
-        return self._config["CostOfPower"]
+        return cast(int, self._config["CostOfPower"])
 
     @property
     def emissions(self) -> int:
         """Emissions in gCOe per kWh."""
-        return self._config["Emissions"]
+        return cast(int, self._config["Emissions"])
 
     @property
     def status_last_reading(self) -> int:
         """Last reading number from the device."""
-        return self._status["LastReadingNo"]
+        return cast(int, self._status["LastReadingNo"])
 
     @property
     def devices(self) -> tuple[PowerDevice, ...]:

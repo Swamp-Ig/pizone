@@ -63,6 +63,15 @@ exclude_lines = [
   "raise NotImplementedError",
 ]
 
+[tool.mypy]
+python_version = "3.14"
+files = ["pizone"]
+warn_return_any = true
+warn_unused_ignores = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+
 [tool.hatch.version]
 source = "vcs"
 
