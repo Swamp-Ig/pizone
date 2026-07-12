@@ -33,9 +33,10 @@ class Controller:
     They raise :exc:`ConnectionError` when the device cannot be reached.
     They raise :exc:`~pizone.exceptions.ControllerCommandError` when the
     device responds but rejects the request (``{ERROR...}`` body or HTTP 4xx).
-    A successful transport request clears a prior connection failure and
-    notifies listeners via
-    :meth:`~pizone.discovery.Listener.controller_reconnected`.
+
+    :attr:`connected` is ``True`` when the ASH bridge is reachable over HTTP
+    and the iZone AC subsystem last returned valid system data. Check
+    :attr:`bridge_connected` for bridge transport health alone.
     """
 
     class Mode(Enum):
@@ -113,7 +114,8 @@ class Controller:
         self._power: Power | None = None
 
         self._initialized: bool = False
-        self._fail_exception: Exception | None = None
+        self._bridge_ok: bool = True
+        self._izone_ok: bool = True
 
         self._sending_lock = Lock()
         self._scan_condition = Condition()
@@ -125,15 +127,20 @@ class Controller:
             ConnectionError: If a required HTTP request fails.
             KeyError: If a required field is missing from a device response.
         """
-        await self._refresh_system(notify=False)
+        settings = await self._refresh_system(notify=False)
+        if settings is None:
+            raise ConnectionError("SystemSettings device ID mismatch")
 
-        self.fan_modes = Controller._VALID_FAN_MODES[
-            str(self._system_settings.get("FanAuto", "disabled"))
-        ]
+        if self._system_settings:
+            self.fan_modes = Controller._VALID_FAN_MODES[
+                str(self._system_settings.get("FanAuto", "disabled"))
+            ]
+        else:
+            self.fan_modes = Controller._VALID_FAN_MODES["disabled"]
 
         await self._probe_v2_api()
 
-        zone_count = int(self._system_settings["NoOfZones"])
+        zone_count = int(settings["NoOfZones"])
         self.zones = [Zone(self, i) for i in range(zone_count)]
 
         await self._refresh_zones(notify=False)
@@ -141,15 +148,18 @@ class Controller:
         await self._probe_power()
 
         self._initialized = True
+        if not self.connected:
+            self._event_coordinator.controller_disconnected(
+                self, ConnectionError("iZone controller unavailable")
+            )
         self._discovery_service.create_task(self._poll_loop())
 
     async def _probe_v2_api(self) -> None:
         """Detect V2 API support; non-fatal on failure."""
         try:
-            response = await self._send_command_async(
+            response = await self._http_post(
                 "iZoneRequestV2",
                 {"iZoneV2Request": {"Type": 1, "No": 0, "No1": 0}},
-                mark_disconnected=False,
             )
             data = json.loads(response)
             uid = data["AirStreamDeviceUId"]
@@ -165,7 +175,7 @@ class Controller:
 
         try:
             power = Power(self)
-            await power.init(mark_disconnected=False)
+            await power.init()
             if power.enabled:
                 self._power = power
                 return
@@ -216,9 +226,14 @@ class Controller:
             self._scan_condition.notify()
 
     @property
+    def bridge_connected(self) -> bool:
+        """True while the ASH bridge is reachable over HTTP."""
+        return self._bridge_ok
+
+    @property
     def connected(self) -> bool:
-        """True while the controller can reach the device over HTTP."""
-        return self._fail_exception is None
+        """True while the bridge is up and the iZone AC subsystem is available."""
+        return self._bridge_ok and self._izone_ok
 
     @property
     def power(self) -> Power | None:
@@ -476,18 +491,24 @@ class Controller:
             ConnectionError: If any HTTP request fails.
             KeyError: If a required field is missing from a device response.
         """
-        zones = int(self._system_settings["NoOfZones"])
-        # gather schedules all refresh coroutines together; _sending_lock serializes
-        # HTTP to one in-flight request per controller. Revisit the lock if firmware
-        # supports concurrent requests — gather can stay.
+        zones = len(self.zones)
+        if zones == 0:
+            await asyncio.gather(
+                self._refresh_system(notify),
+                self._refresh_power(notify),
+            )
+            return
         await asyncio.gather(
             self._refresh_system(notify),
             self._refresh_power(notify),
             *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)],
         )
 
-    async def _refresh_system(self, notify: bool = True) -> None:
+    async def _refresh_system(self, notify: bool = True) -> ControllerData | None:
         """Refresh the system settings from the device.
+
+        Returns the device response even when the payload is a fault placeholder,
+        so callers can read fields like ``NoOfZones`` during initialization.
 
         Raises:
             ConnectionError: If the HTTP request fails.
@@ -496,25 +517,40 @@ class Controller:
         values: Controller.ControllerData = await self._get_resource("SystemSettings")
         if self._device_uid != values["AirStreamDeviceUId"]:
             _LOG.error("_refresh_system called with non-matching device ID")
-            return
+            return None
+
+        if not self._system_settings_valid(values):
+            _LOG.warning(
+                "iZone subsystem fault uid=%s; retaining cache",
+                self._device_uid,
+            )
+            self._set_izone_ok(
+                False, ConnectionError("iZone controller unavailable")
+            )
+            if notify:
+                self._event_coordinator.controller_update(self)
+            return values
 
         self._system_settings = values
-
+        self._set_izone_ok(True)
         if notify:
             self._event_coordinator.controller_update(self)
+        return values
 
     async def _refresh_power(self, notify: bool = True) -> None:
-        """Refresh power monitor data when enabled.
-
-        Raises:
-            ConnectionError: If the HTTP request fails.
-            json.JSONDecodeError: If the device response is not valid JSON.
-            KeyError: If the response is missing required fields.
-        """
+        """Refresh power monitor data when enabled."""
         if self._power is None or not self._power.enabled:
             return
 
-        updated = await self._power.refresh()
+        try:
+            updated = await self._power.refresh()
+        except (ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError):
+            _LOG.warning(
+                "Power refresh failed for uid=%s",
+                self._device_uid,
+                exc_info=True,
+            )
+            return
 
         if updated and notify:
             self._event_coordinator.power_update(self)
@@ -527,7 +563,9 @@ class Controller:
             KeyError: If a response is missing required fields.
             AttributeError: If a zone index in the response does not match.
         """
-        zones = int(self._system_settings["NoOfZones"])
+        zones = len(self.zones)
+        if zones == 0:
+            return
         await asyncio.gather(
             *[self._refresh_zone_group(i, notify) for i in range(0, zones, 4)]
         )
@@ -555,9 +593,17 @@ class Controller:
     def _refresh_address(self, address: str) -> None:
         """Update the device IP and schedule a reconnect attempt if needed."""
         self._ip = address
-        # Signal to the retry connection loop to have another go.
-        if self._fail_exception:
+        if not self._bridge_ok:
             self._discovery_service.create_task(self._retry_connection())
+
+    @staticmethod
+    def _system_settings_valid(values: ControllerData) -> bool:
+        """Return whether *values* look like healthy AC subsystem data."""
+        return (
+            int(values["NoOfZones"]) > 0
+            and str(values["SysFan"]) != "error"
+            and str(values["RAS"]) != "error"
+        )
 
     def _get_system_state(self, state: str) -> DictValue:
         return self._system_settings[state]
@@ -583,33 +629,47 @@ class Controller:
         self._event_coordinator.controller_update(self)
         await self.refresh()
 
+    def _set_bridge_ok(self, ok: bool, ex: Exception | None = None) -> None:
+        was_connected = self.connected
+        self._bridge_ok = ok
+        if not ok and ex is None:
+            ex = ConnectionError("Unable to connect to the controller")
+        self._notify_connected_changed(was_connected, ex if not ok else None)
+
+    def _set_izone_ok(self, ok: bool, ex: Exception | None = None) -> None:
+        was_connected = self.connected
+        self._izone_ok = ok
+        if not ok and ex is None:
+            ex = ConnectionError("iZone controller unavailable")
+        self._notify_connected_changed(was_connected, ex if not ok else None)
+
+    def _notify_connected_changed(
+        self, was_connected: bool, ex: Exception | None
+    ) -> None:
+        if was_connected == self.connected or not self._initialized:
+            return
+        if self.connected:
+            self._event_coordinator.controller_update(self)
+            for zone in self.zones:
+                self._event_coordinator.zone_update(self, zone)
+            self._event_coordinator.power_update(self)
+            self._event_coordinator.controller_reconnected(self)
+        elif ex is not None:
+            self._event_coordinator.controller_disconnected(self, ex)
+
     def _failed_connection(self, ex: Exception) -> None:
-        if self._fail_exception:
-            self._fail_exception = ex
-            return
-        self._fail_exception = ex
-        if not self._initialized:
-            return
-        self._event_coordinator.controller_disconnected(self, ex)
+        """Mark the bridge transport as failed."""
+        self._set_bridge_ok(False, ex)
 
     def _restored_connection(self) -> None:
-        """Clear a prior connection failure after successful I/O."""
-        if self._fail_exception is None:
-            return
-        self._fail_exception = None
-        if not self._initialized:
-            return
-        self._event_coordinator.controller_update(self)
-        for zone in self.zones:
-            self._event_coordinator.zone_update(self, zone)
-        self._event_coordinator.power_update(self)
-        self._event_coordinator.controller_reconnected(self)
+        """Mark the bridge transport as restored."""
+        self._set_bridge_ok(True)
 
     async def _retry_connection(self) -> None:
         """Attempt to restore connectivity after a connection failure.
 
         Connection errors are logged and not re-raised. A successful refresh
-        restores :attr:`connected` via :meth:`_restored_connection`.
+        restores :attr:`connected` when both bridge and iZone layers recover.
         """
         _LOG.info(
             "Attempting to reconnect to server uid=%s ip=%s",
@@ -627,6 +687,77 @@ class Controller:
                 exc_info=True,
             )
 
+    async def _http_get(self, resource: str) -> Any:
+        """Fetch a JSON resource via HTTP GET without updating connection state.
+
+        Raises:
+            ConnectionError: If the device cannot be reached or the response
+                cannot be decoded.
+            ControllerCommandError: If the device returns HTTP 4xx.
+        """
+        session = self._discovery_service.session
+        if session is None:
+            raise ConnectionError("Discovery service is not started")
+        async with (
+            self._sending_lock,
+            session.get(
+                f"http://{self.device_ip}/{resource}",
+                timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
+            ) as response,
+        ):
+            if response.status >= 400 and response.status < 500:
+                raise ControllerCommandError(
+                    f"HTTP {response.status} for http://{self.device_ip}/{resource}"
+                )
+            try:
+                return await response.json(content_type=None)
+            except json.JSONDecodeError as ex:
+                text = await response.text()
+                if text[-4:] == "{OK}":
+                    return json.loads(text[:-4])
+                _LOG.error('Decode error for "%s"', text, exc_info=True)
+                raise ConnectionError(
+                    "Unable to decode response from the controller"
+                ) from ex
+
+    async def _http_post(self, command: str, data: dict[str, Any]) -> str:
+        """Send a command via HTTP POST without updating connection state.
+
+        Raises:
+            ConnectionError: If the device cannot be reached or the HTTP request fails.
+            ControllerCommandError: If the device returns HTTP 4xx or an
+                ``{ERROR...}`` payload.
+        """
+        session = self._discovery_service.session
+        if session is None:
+            raise ConnectionError("Discovery service is not started")
+        body = json.dumps(data).encode("latin_1")
+        async with (
+            self._sending_lock,
+            session.post(
+                f"http://{self.device_ip}/{command}",
+                data=body,
+                headers={"Connection": "close"},
+                timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
+            ) as response,
+        ):
+            if response.status >= 400 and response.status < 500:
+                raise ControllerCommandError(
+                    f"HTTP {response.status} for http://{self.device_ip}/{command}"
+                )
+            if response.status != 200:
+                raise ConnectionError(
+                    f"Unable to connect to: http://{self.device_ip}/{command}"
+                    f" response={response.status} message={response.reason}"
+                )
+            result = await response.text(encoding="latin_1")
+
+        if len(result) >= 7 and result[:6] == "{ERROR":
+            raise ControllerCommandError(f"Server returned error state {result}")
+        if len(result) >= 4 and result[-4:] == "{OK}":
+            result = result[:-4]
+        return result
+
     async def _get_resource(self, resource: str) -> Any:
         """Fetch a JSON resource from the device via HTTP GET.
 
@@ -636,46 +767,26 @@ class Controller:
             ControllerCommandError: If the device returns HTTP 4xx.
         """
         try:
-            session = self._discovery_service.session
-            if session is None:
-                raise ConnectionError("Discovery service is not started")
-            async with (
-                self._sending_lock,
-                session.get(
-                    f"http://{self.device_ip}/{resource}",
-                    timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
-                ) as response,
-            ):
-                if response.status >= 400 and response.status < 500:
-                    self._restored_connection()
-                    raise ControllerCommandError(
-                        f"HTTP {response.status} for http://{self.device_ip}/{resource}"
-                    )
-                try:
-                    result = await response.json(content_type=None)
-                except json.JSONDecodeError as ex:
-                    text = await response.text()
-                    if text[-4:] == "{OK}":
-                        result = json.loads(text[:-4])
-                    else:
-                        _LOG.error('Decode error for "%s"', text, exc_info=True)
-                        raise ConnectionError(
-                            "Unable to decode response from the controller"
-                        ) from ex
-                self._restored_connection()
-                return result
+            result = await self._http_get(resource)
+        except ControllerCommandError:
+            self._set_bridge_ok(True)
+            raise
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
-            self._failed_connection(ex)
+            self._set_bridge_ok(
+                False, ConnectionError("Unable to connect to the controller")
+            )
             raise ConnectionError("Unable to connect to the controller") from ex
+        except ConnectionError as ex:
+            if str(ex) == "Unable to decode response from the controller":
+                self._set_bridge_ok(True)
+            else:
+                self._set_bridge_ok(False, ex)
+            raise
+        self._set_bridge_ok(True)
+        return result
 
-    async def _send_command_async(
-        self, command: str, data: dict[str, Any], *, mark_disconnected: bool = True
-    ) -> str:
+    async def _send_command_async(self, command: str, data: dict[str, Any]) -> str:
         """Send a command to the device via HTTP POST.
-
-        Args:
-            mark_disconnected: When ``False``, transport failures do not mark
-                the controller disconnected.
 
         Raises:
             ConnectionError: If the device cannot be reached or the HTTP request fails.
@@ -683,39 +794,17 @@ class Controller:
                 ``{ERROR...}`` payload.
         """
         try:
-            session = self._discovery_service.session
-            if session is None:
-                raise ConnectionError("Discovery service is not started")
-            body = json.dumps(data).encode("latin_1")
-            async with (
-                self._sending_lock,
-                session.post(
-                    f"http://{self.device_ip}/{command}",
-                    data=body,
-                    headers={"Connection": "close"},
-                    timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
-                ) as response,
-            ):
-                if response.status >= 400 and response.status < 500:
-                    self._restored_connection()
-                    raise ControllerCommandError(
-                        f"HTTP {response.status} for http://{self.device_ip}/{command}"
-                    )
-                if response.status != 200:
-                    raise aiohttp.ClientError(
-                        f"Unable to connect to: http://{self.device_ip}/{command}"
-                        f" response={response.status} message={response.reason}"
-                    )
-                result = await response.text(encoding="latin_1")
+            result = await self._http_post(command, data)
+        except ControllerCommandError:
+            self._set_bridge_ok(True)
+            raise
         except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
-            if mark_disconnected:
-                self._failed_connection(ex)
+            self._set_bridge_ok(
+                False, ConnectionError("Unable to connect to controller")
+            )
             raise ConnectionError("Unable to connect to controller") from ex
-
-        if len(result) >= 7 and result[:6] == "{ERROR":
-            self._restored_connection()
-            raise ControllerCommandError(f"Server returned error state {result}")
-        if len(result) >= 4 and result[-4:] == "{OK}":
-            result = result[:-4]
-        self._restored_connection()
+        except ConnectionError as ex:
+            self._set_bridge_ok(False, ex)
+            raise
+        self._set_bridge_ok(True)
         return result

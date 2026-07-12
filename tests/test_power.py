@@ -7,21 +7,39 @@ from typing import Any, cast
 import pytest
 
 from pizone import BatteryLevel, Controller, Power
+from pizone.discovery import Listener
 
 from .power_data import POWER_CONFIG, POWER_STATUS
+
+
+class _PowerListener(Listener):
+    def __init__(self) -> None:
+        self.power_updates = 0
+
+    def power_update(self, _controller: Controller) -> None:
+        self.power_updates += 1
 
 
 class MockPowerController:
     """Minimal controller stub for Power unit tests."""
 
-    def __init__(self, responses: dict[int, dict[str, object]]) -> None:
+    def __init__(
+        self,
+        responses: dict[int, dict[str, object]],
+        *,
+        bridge_connected: bool = True,
+        listener: _PowerListener | None = None,
+    ) -> None:
         self._responses = responses
         self.sent: list[tuple[str, dict[str, Any]]] = []
+        self._bridge_ok = bridge_connected
+        self._event_coordinator = listener or _PowerListener()
 
-    async def _send_command_async(
-        self, command: str, data: dict[str, Any], *, mark_disconnected: bool = True
-    ) -> str:
-        del mark_disconnected
+    @property
+    def bridge_connected(self) -> bool:
+        return self._bridge_ok
+
+    async def _http_post(self, command: str, data: dict[str, Any]) -> str:
         self.sent.append((command, data))
         req_type: int = data["PowerRequest"]["Type"]
         return json.dumps(self._responses[req_type])
@@ -39,6 +57,7 @@ async def test_power_init_and_status_last_reading() -> None:
 
     await power.init()
     assert power.enabled is True
+    assert power.connected is True
     assert power.voltage == 240
     assert power.groups is not None
     assert len(power.groups) == 1
@@ -105,3 +124,44 @@ async def test_power_nested_property_reads() -> None:
     assert group.name == "Grid"
     assert group.status_ok is False
     assert group.status_power == 1500
+
+
+@pytest.mark.asyncio
+async def test_power_connected_false_when_bridge_down() -> None:
+    controller = MockPowerController(
+        {1: {"PowerMonitorConfig": POWER_CONFIG}},
+        bridge_connected=False,
+    )
+    power = Power(cast(Controller, controller))
+
+    with pytest.raises(ConnectionError, match="Bridge not connected"):
+        await power.init()
+
+    assert power.connected is False
+
+
+@pytest.mark.asyncio
+async def test_power_connected_restored_on_recovery() -> None:
+    listener = _PowerListener()
+    controller = MockPowerController(
+        {
+            1: {"PowerMonitorConfig": POWER_CONFIG},
+            2: {"PowerMonitorStatus": POWER_STATUS},
+        },
+        listener=listener,
+    )
+    power = Power(cast(Controller, controller))
+    await power.init()
+
+    controller._bridge_ok = False
+    controller._responses = {}
+    with pytest.raises(ConnectionError):
+        await power.refresh()
+    assert power.connected is False
+    assert listener.power_updates == 1
+
+    controller._bridge_ok = True
+    controller._responses = {2: {"PowerMonitorStatus": POWER_STATUS}}
+    await power.refresh()
+    assert power.connected is True
+    assert listener.power_updates == 2

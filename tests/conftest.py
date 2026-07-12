@@ -62,48 +62,35 @@ class MockController(Controller):
             self._failed_connection(ex)
             raise ConnectionError("Explicitly Disconnected") from ex
 
-    async def _get_resource(self, resource: str) -> Any:
-        """Mock out the network IO for _get_resource."""
+    async def _http_get(self, resource: str) -> Any:
+        """Mock out the network IO for tracked GET requests."""
         self._check_discovery_connected()
         result = self.resources.get(resource)
         if result:
-            self._restored_connection()
             return deepcopy(result)
         raise ConnectionError(f"Mock resource '{resource}' not available")
 
-    async def _send_command_async(
-        self, command: str, data: dict[str, Any], *, mark_disconnected: bool = True
-    ) -> str:
-        """Mock out the network IO for _send_command."""
-        if self._fail_exception:
-            raise ConnectionError(
-                "Unable to connect to the controller"
-            ) from self._fail_exception
+    async def _http_post(self, command: str, data: dict[str, Any]) -> str:
+        """Mock out the network IO for untracked POST requests."""
+        if not self._bridge_ok:
+            raise ConnectionError("Unable to connect to the controller")
         self._check_discovery_connected()
         self.sent.append((command, data))
         if command == "iZoneRequestV2":
             if self.v2_probe_response is not None:
-                self._restored_connection()
                 return self.v2_probe_response
-            ex = ConnectionError("V2 probe failed")
-            if mark_disconnected:
-                self._failed_connection(ex)
-            raise ConnectionError("Unable to connect to controller") from ex
+            raise ConnectionError("Unable to connect to controller")
         if command == "PowerRequest":
             req_type: int = data["PowerRequest"]["Type"]
             if req_type in self.fail_power_types:
-                ex = TimeoutError("Power request failed")
-                if mark_disconnected:
-                    self._failed_connection(ex)
-                raise ConnectionError("Unable to connect to controller") from ex
+                raise ConnectionError("Unable to connect to controller")
             if req_type == 1:
-                config = self.power_config if self.power_config is not None else POWER_CONFIG
-                self._restored_connection()
+                config = (
+                    self.power_config if self.power_config is not None else POWER_CONFIG
+                )
                 return json.dumps({"PowerMonitorConfig": config})
             if req_type == 2:
-                self._restored_connection()
                 return json.dumps({"PowerMonitorStatus": POWER_STATUS})
-        self._restored_connection()
         return ""
 
 

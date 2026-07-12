@@ -7,10 +7,35 @@ from typing import cast
 import pytest
 from pytest import raises
 
-from pizone import Controller
+from pizone import Controller, Listener
 
 from .conftest import MockController, MockDiscoveryService, _register_mock_service
 from .power_data import POWER_CONFIG
+from .resources import SYSTEMS
+
+
+class _DisconnectListener(Listener):
+    def __init__(self) -> None:
+        self.disconnected = 0
+        self.reconnected = 0
+        self.last_exception: Exception | None = None
+
+    def controller_disconnected(self, _ctrl: Controller, ex: Exception) -> None:
+        self.disconnected += 1
+        self.last_exception = ex
+
+    def controller_reconnected(self, _ctrl: Controller) -> None:
+        self.reconnected += 1
+
+
+def _fault_system_settings(device_uid: str) -> dict[str, object]:
+    settings = deepcopy(SYSTEMS["000000001"]["SystemSettings"])
+    settings["AirStreamDeviceUId"] = device_uid
+    settings["NoOfZones"] = 0
+    settings["SysFan"] = "error"
+    settings["RAS"] = "error"
+    settings["UnitType"] = "No Unit Type Configured!"
+    return settings
 
 
 @pytest.mark.asyncio
@@ -213,7 +238,7 @@ async def test_initialize_clears_ipower_when_config_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_power_init_probe_timeout_does_not_mark_disconnected() -> None:
+async def test_power_init_probe_failure_leaves_controller_connected() -> None:
     svc = MockDiscoveryService()
     original_create = svc._create_controller
 
@@ -234,22 +259,25 @@ async def test_power_init_probe_timeout_does_not_mark_disconnected() -> None:
         controller = cast(MockController, svc._controllers["000000003"])
 
         assert controller.connected is True
-        assert controller._fail_exception is None
+        assert controller.bridge_connected is True
+        assert controller._bridge_ok is True
+        assert controller._izone_ok is True
     finally:
         await svc.close()
 
 
 @pytest.mark.asyncio
-async def test_power_poll_timeout_marks_disconnected(
+async def test_power_poll_failure_does_not_mark_controller_disconnected(
     ipower_service: MockDiscoveryService,
 ) -> None:
     controller = cast(MockController, ipower_service._controllers["000000003"])
+    assert controller.power is not None
     controller.fail_power_types.add(2)
 
-    with raises(ConnectionError):
-        await controller._refresh_power(notify=False)
+    await controller._refresh_power(notify=False)
 
-    assert controller.connected is False
+    assert controller.connected is True
+    assert controller.power.connected is False
 
 
 @pytest.mark.asyncio
@@ -293,3 +321,120 @@ async def test_v2_probe_clears_is_v2_on_http_error() -> None:
         assert controller.is_v2 is False
     finally:
         await svc.close()
+
+
+@pytest.mark.asyncio
+async def test_bridge_ok_true_when_izone_fault(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    healthy_fan = controller.fan
+
+    controller.resources["SystemSettings"] = _fault_system_settings("000000001")
+    await controller._refresh_system(notify=False)
+
+    assert controller.bridge_connected is True
+    assert controller.connected is False
+    assert controller.fan == healthy_fan
+
+
+@pytest.mark.asyncio
+async def test_cache_preserved_on_izone_fault(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    healthy_settings = deepcopy(controller.resources["SystemSettings"])
+
+    controller.resources["SystemSettings"] = _fault_system_settings("000000001")
+    await controller._refresh_system(notify=False)
+
+    assert controller._system_settings == healthy_settings
+
+
+@pytest.mark.asyncio
+async def test_connected_restored_on_izone_recovery(
+    service: MockDiscoveryService,
+) -> None:
+    listener = _DisconnectListener()
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._event_coordinator = listener
+    healthy_settings = deepcopy(controller.resources["SystemSettings"])
+
+    controller.resources["SystemSettings"] = _fault_system_settings("000000001")
+    await controller._refresh_system(notify=True)
+    assert listener.disconnected == 1
+
+    controller.resources["SystemSettings"] = healthy_settings
+    await controller._refresh_system(notify=True)
+    assert controller.connected is True
+    assert listener.reconnected == 1
+
+
+@pytest.mark.asyncio
+async def test_no_listener_flutter_repeated_fault_polls(
+    service: MockDiscoveryService,
+) -> None:
+    listener = _DisconnectListener()
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._event_coordinator = listener
+
+    controller.resources["SystemSettings"] = _fault_system_settings("000000001")
+    await controller._refresh_system(notify=True)
+    await controller._refresh_system(notify=True)
+
+    assert listener.disconnected == 1
+    assert listener.reconnected == 0
+
+
+@pytest.mark.asyncio
+async def test_izone_fault_disconnect_uses_connection_error(
+    service: MockDiscoveryService,
+) -> None:
+    listener = _DisconnectListener()
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._event_coordinator = listener
+
+    controller.resources["SystemSettings"] = _fault_system_settings("000000001")
+    await controller._refresh_system(notify=True)
+
+    assert isinstance(listener.last_exception, ConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_v2_probe_failure_leaves_bridge_ok(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller.v2_probe_response = None
+
+    await controller._probe_v2_api()
+
+    assert controller._bridge_ok is True
+    assert controller.bridge_connected is True
+
+
+@pytest.mark.asyncio
+async def test_init_fault_disconnect_listener() -> None:
+    listener = _DisconnectListener()
+    svc = MockDiscoveryService()
+    controller = MockController(
+        svc,
+        listener,
+        device_uid="000000004",
+        device_ip="10.0.0.4",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller.resources["SystemSettings"] = _fault_system_settings("000000004")
+
+    await controller._initialize()
+
+    assert controller.connected is False
+    assert listener.disconnected == 1
+    assert controller.zones == []
+
+
+@pytest.mark.asyncio
+async def test_both_false_on_transport_failure(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._connected = False
+
+    with raises(ConnectionError):
+        await controller._get_resource("SystemSettings")
+
+    assert controller.bridge_connected is False
+    assert controller.connected is False

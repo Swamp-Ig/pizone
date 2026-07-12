@@ -415,7 +415,7 @@ class DiscoveryService:
                 return ctrl
         return None
 
-    async def _wrap_update(self, coro: Awaitable[None]) -> None:
+    async def _wrap_update(self, coro: Awaitable[object]) -> None:
         """Run a controller refresh coroutine and log connection failures."""
         try:
             await coro

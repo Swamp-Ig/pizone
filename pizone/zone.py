@@ -187,6 +187,8 @@ class Zone:
         """
         if zone_data["Index"] != self._index:
             raise AttributeError("Can't change index of existing zone.")
+        if str(zone_data.get("Type")) == "error":
+            return
         self._zone_data = zone_data
         if notify:
             self._fire_listeners()

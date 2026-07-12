@@ -12,6 +12,8 @@ from enum import IntEnum, unique
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
+from .exceptions import ControllerCommandError
+
 if TYPE_CHECKING:
     from .controller import Controller
 
@@ -190,22 +192,17 @@ class Power:
         self._status: dict[str, Any] = {"LastReadingNo": -1}
         self._devices = tuple(PowerDevice(self, i) for i in range(5))
         self._groups: tuple[PowerGroup, ...] | None = None
+        self._power_ok: bool = True
 
-    async def init(self, *, mark_disconnected: bool = True) -> None:
+    async def init(self) -> None:
         """Load power monitor configuration from the device.
-
-        Args:
-            mark_disconnected: When ``False``, connection failures during this
-                request do not mark the controller disconnected.
 
         Raises:
             ConnectionError: If the HTTP request fails.
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing required fields.
         """
-        self._config = await self._do_request(
-            1, "PowerMonitorConfig", mark_disconnected=mark_disconnected
-        )
+        self._config = await self._do_request(1, "PowerMonitorConfig")
         gdict: dict[int, list[PowerChannel]] = {}
         for dev in self.devices:
             for chan in dev.channels:
@@ -232,28 +229,53 @@ class Power:
         self._status = status
         return True
 
-    async def _do_request(
-        self, req_type: int, result: str, *, mark_disconnected: bool = True
-    ) -> dict[str, Any]:
+    async def _do_request(self, req_type: int, result: str) -> dict[str, Any]:
         """Send a power monitor request to the device.
-
-        Args:
-            mark_disconnected: When ``False``, connection failures do not mark
-                the controller disconnected.
 
         Raises:
             ConnectionError: If the HTTP request fails.
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing *result*.
         """
+        if not self._controller.bridge_connected:
+            self._set_power_ok(False)
+            raise ConnectionError("Bridge not connected")
+        try:
+            # pylint: disable=protected-access
+            datas = await self._controller._http_post(
+                "PowerRequest",
+                {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}},
+            )
+            data = json.loads(datas)
+            payload = cast(dict[str, Any], data[result])
+        except (
+            ConnectionError,
+            ControllerCommandError,
+            json.JSONDecodeError,
+            KeyError,
+        ) as ex:
+            self._set_power_ok(False)
+            if isinstance(ex, ConnectionError):
+                raise
+            if isinstance(ex, json.JSONDecodeError):
+                raise ConnectionError("Invalid power monitor response") from ex
+            if isinstance(ex, KeyError):
+                raise ConnectionError("Invalid power monitor response") from ex
+            raise ConnectionError("Power monitor request failed") from ex
+        self._set_power_ok(True)
+        return payload
+
+    def _set_power_ok(self, ok: bool) -> None:
+        if self._power_ok == ok:
+            return
+        self._power_ok = ok
         # pylint: disable=protected-access
-        datas = await self._controller._send_command_async(
-            "PowerRequest",
-            {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}},
-            mark_disconnected=mark_disconnected,
-        )
-        data = json.loads(datas)
-        return cast(dict[str, Any], data[result])
+        self._controller._event_coordinator.power_update(self._controller)
+
+    @property
+    def connected(self) -> bool:
+        """True while the bridge is up and power monitor I/O is healthy."""
+        return self._controller.bridge_connected and self._power_ok
 
     @property
     def enabled(self) -> bool:
