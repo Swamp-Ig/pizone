@@ -560,6 +560,8 @@ class Controller:
         """Refresh power monitor data when enabled."""
         if self._power is None or not self._power.enabled:
             return
+        if not self.bridge_connected:
+            return
 
         try:
             updated = await self._power.refresh()

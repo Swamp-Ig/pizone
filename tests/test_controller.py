@@ -267,6 +267,29 @@ async def test_power_init_probe_failure_leaves_controller_connected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_power_refresh_skipped_when_bridge_disconnected(
+    ipower_service: MockDiscoveryService,
+) -> None:
+    controller = cast(MockController, ipower_service._controllers["000000003"])
+    assert controller.power is not None
+    power_requests_before = [
+        data
+        for command, data in controller.sent
+        if command == "PowerRequest"
+    ]
+    controller._bridge_ok = False
+
+    await controller._refresh_power(notify=False)
+
+    power_requests_after = [
+        data
+        for command, data in controller.sent
+        if command == "PowerRequest"
+    ]
+    assert power_requests_after == power_requests_before
+
+
+@pytest.mark.asyncio
 async def test_power_poll_failure_does_not_mark_controller_disconnected(
     ipower_service: MockDiscoveryService,
 ) -> None:
