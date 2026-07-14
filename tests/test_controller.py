@@ -1,11 +1,9 @@
 """Tests for controller property reads and command paths."""
 
-# pylint: disable=protected-access
 from copy import deepcopy
 from typing import cast
 
 import pytest
-from pytest import raises
 
 from pizone import Controller, Listener
 
@@ -111,7 +109,7 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
 async def test_set_fan_validation(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
 
-    with raises(AttributeError, match="Fan mode top not allowed"):
+    with pytest.raises(AttributeError, match="Fan mode top not allowed"):
         await controller.set_fan(Controller.Fan.TOP)
 
 
@@ -119,7 +117,7 @@ async def test_set_fan_validation(service: MockDiscoveryService) -> None:
 async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
 
-    with raises(AttributeError, match="Invalid Sleep Timer"):
+    with pytest.raises(AttributeError, match="Invalid Sleep Timer"):
         await controller.set_sleep_timer(45)
 
 
@@ -127,9 +125,9 @@ async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None
 async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
 
-    with raises(AttributeError, match="not rounded to nearest 0.5"):
+    with pytest.raises(AttributeError, match="not rounded to nearest 0.5"):
         await controller.set_temp_setpoint(23.3)
-    with raises(AttributeError, match="out of range"):
+    with pytest.raises(AttributeError, match="out of range"):
         await controller.set_temp_setpoint(35.0)
 
 
@@ -189,9 +187,7 @@ async def test_initialize_does_not_fetch_power_status(
 ) -> None:
     controller = cast(MockController, ipower_service._controllers["000000003"])
     power_requests = [
-        data
-        for command, data in controller.sent
-        if command == "PowerRequest"
+        data for command, data in controller.sent if command == "PowerRequest"
     ]
 
     assert len(power_requests) == 1
@@ -273,18 +269,14 @@ async def test_power_refresh_skipped_when_bridge_disconnected(
     controller = cast(MockController, ipower_service._controllers["000000003"])
     assert controller.power is not None
     power_requests_before = [
-        data
-        for command, data in controller.sent
-        if command == "PowerRequest"
+        data for command, data in controller.sent if command == "PowerRequest"
     ]
     controller._bridge_ok = False
 
     await controller._refresh_power(notify=False)
 
     power_requests_after = [
-        data
-        for command, data in controller.sent
-        if command == "PowerRequest"
+        data for command, data in controller.sent if command == "PowerRequest"
     ]
     assert power_requests_after == power_requests_before
 
@@ -495,7 +487,7 @@ async def test_both_false_on_transport_failure(service: MockDiscoveryService) ->
     controller = cast(MockController, service._controllers["000000001"])
     controller._connected = False
 
-    with raises(ConnectionError):
+    with pytest.raises(ConnectionError):
         await controller._get_resource("SystemSettings")
 
     assert controller.bridge_connected is False

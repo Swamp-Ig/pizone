@@ -1,8 +1,6 @@
 """iZone device discovery."""
 
 import asyncio
-import json
-import logging
 from asyncio import (
     BaseTransport,
     CancelledError,
@@ -14,12 +12,14 @@ from asyncio import (
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import suppress
 from ipaddress import IPv4Interface
+import json
+import logging
 from types import TracebackType
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import aiohttp
-import ifaddr
 from aiohttp import ClientSession
+import ifaddr
 
 from .controller import Controller
 from .types import ControllerEndpoint
@@ -52,7 +52,7 @@ SCAN_TIMEOUT = 20.0
 _LOG = logging.getLogger("pizone.discovery")
 
 # disposition: 1.4 — create_discovery() singleton guard
-_active_discovery: "DiscoveryService | None" = None  # pylint: disable=invalid-name
+_active_discovery: DiscoveryService | None = None
 
 
 class LogExceptions:
@@ -61,7 +61,7 @@ class LogExceptions:
     def __init__(self, func: str) -> None:
         self.func = func
 
-    def __enter__(self) -> LogExceptions:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -82,30 +82,31 @@ class Listener:
     """Base class for iZone controller event listeners."""
 
     def controller_discovered(self, ctrl: Controller) -> None:
-        """Called when a controller is discovered.
+        """Handle a discovered controller.
 
         Also called for every existing controller when a new listener is
         registered.
         """
 
     def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
-        """Called when the connection to a controller is lost.
+        """Handle a lost controller connection.
 
         Args:
             ex: The exception that caused the disconnect.
+
         """
 
     def controller_reconnected(self, ctrl: Controller) -> None:
-        """Called when a controller reconnects after a connection failure."""
+        """Handle a controller reconnect after a connection failure."""
 
     def controller_update(self, ctrl: Controller) -> None:
-        """Called when controller system data is refreshed."""
+        """Handle refreshed controller system data."""
 
     def zone_update(self, ctrl: Controller, zone: Zone) -> None:
-        """Called when zone data is refreshed."""
+        """Handle refreshed zone data."""
 
     def power_update(self, ctrl: Controller) -> None:
-        """Called when power monitor data is refreshed."""
+        """Handle refreshed power monitor data."""
 
 
 class DiscoveryService:
@@ -117,7 +118,7 @@ class DiscoveryService:
 
     _controller_cls: type[Controller] = Controller
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         session: ClientSession | None = None,
         *,
@@ -136,6 +137,7 @@ class DiscoveryService:
                 omitted, the service creates and owns its own session.
             on_endpoint_discovered: Optional callback for newly discovered
                 controller endpoints.
+
         """
         self._close_task: Task[Any] | None = None
         # Both tracks: True = legacy discovery()/Listener path.
@@ -173,8 +175,6 @@ class DiscoveryService:
         # disposition: deprecate
         class _EventCoordinator(Listener):
             """Fan-out adapter that dispatches controller and zone events to listeners."""
-
-            # pylint: disable=protected-access
 
             def controller_discovered(self, ctrl: Controller) -> None:
                 _LOG.info(
@@ -224,7 +224,7 @@ class DiscoveryService:
 
         self._event_coordinator: Listener = _EventCoordinator()
 
-    async def __aenter__(self) -> DiscoveryService:
+    async def __aenter__(self) -> Self:
         await self.start_discovery()
         return self
 
@@ -273,6 +273,7 @@ class DiscoveryService:
 
         Raises:
             ValueError: If *listener* is not registered.
+
         """
         self._listeners.remove(listener)
 
@@ -283,6 +284,7 @@ class DiscoveryService:
             OSError: If the discovery socket cannot be created or bound.
             RuntimeError: If :meth:`start_discovery` is called when a
                 transport is already active.
+
         """
         if self._own_session:
             self._session = ClientSession()
@@ -290,7 +292,6 @@ class DiscoveryService:
         _svc = self
 
         class _UDPTransport(DatagramProtocol):
-            # pylint: disable=protected-access
             def connection_made(self, transport: BaseTransport) -> None:
                 _svc._on_connection_made(cast(DatagramTransport, transport))
 
@@ -345,7 +346,7 @@ class DiscoveryService:
                 ):
                     async with self._scan_condition:
                         await self._scan_condition.wait()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
             if self._close_task:
@@ -467,7 +468,7 @@ class DiscoveryService:
 
         verified: list[ControllerEndpoint] = []
         seen_hosts: set[str] = set()
-        for _, host in collector.items():
+        for host in collector.values():
             if host in seen_hosts:
                 continue
             seen_hosts.add(host)
@@ -503,6 +504,7 @@ class DiscoveryService:
             ControllerCommandError: If the device rejects the protocol request.
             ResponseDecodeError: If the device returns malformed data.
             KeyError: If a required field is missing from a device response.
+
         """
         if uid in self._claimed_endpoints:
             raise RuntimeError(f"Controller {uid} already created")
@@ -603,7 +605,7 @@ class DiscoveryService:
                         data = json.loads(text[:-4])
                     else:
                         return None
-        except (TimeoutError, aiohttp.ClientError, OSError):
+        except TimeoutError, aiohttp.ClientError, OSError:
             return None
 
         uid = data.get("AirStreamDeviceUId")
@@ -716,7 +718,7 @@ class DiscoveryService:
         _LOG.warning("Error passed and ignored to error_received", exc_info=True)
 
     def _find_by_addr(self, addr: tuple[str, int]) -> Controller | None:
-        for _, ctrl in self._controllers.items():
+        for ctrl in self._controllers.values():
             if ctrl.device_ip == addr[0]:
                 return ctrl
         return None
@@ -739,7 +741,9 @@ class DiscoveryService:
             self._discovery_received(data)
 
     # disposition: deprecate
-    def _parse_datagram_deprecated(self, data: bytes) -> tuple[list[str], str, str] | None:
+    def _parse_datagram_deprecated(
+        self, data: bytes
+    ) -> tuple[list[str], str, str] | None:
         try:
             message = data.decode().split(",")
         except UnicodeDecodeError:
@@ -759,7 +763,6 @@ class DiscoveryService:
 
         message, device_uid, device_ip = parsed
 
-        # pylint: disable=protected-access
         if device_uid not in self._controllers:
             if device_uid in self._pending_init:
                 return
@@ -775,7 +778,7 @@ class DiscoveryService:
             async def initialize_controller() -> None:
                 try:
                     try:
-                        await controller._initialize()
+                        await controller._initialize()  # noqa: SLF001
                     except ConnectionError as ex:
                         _LOG.warning(
                             "Can't connect to discovered server at IP '%s' exception: %s",
@@ -792,7 +795,7 @@ class DiscoveryService:
             self.create_task(initialize_controller())
         else:
             controller = self._controllers[device_uid]
-            controller._refresh_address(device_ip)
+            controller._refresh_address(device_ip)  # noqa: SLF001
 
     # disposition: 1.4
     def _parse_datagram(self, data: bytes) -> ControllerEndpoint | None:
@@ -855,6 +858,7 @@ def discovery(
     Args:
         listeners: Optional listeners registered before discovery starts.
         session: Optional shared :class:`aiohttp.ClientSession`.
+
     """
     service = DiscoveryService(session=session)
     service._legacy_pathway = True  # noqa: SLF001
@@ -865,7 +869,7 @@ def discovery(
 
 # disposition: 1.4
 def _clear_discovery_global(service: DiscoveryService) -> None:
-    global _active_discovery  # pylint: disable=global-statement
+    global _active_discovery  # noqa: PLW0603
     if _active_discovery is service:
         _active_discovery = None
 
@@ -898,8 +902,9 @@ async def create_discovery(
 
     Raises:
         RuntimeError: If a discovery service already exists.
+
     """
-    global _active_discovery  # pylint: disable=global-statement
+    global _active_discovery  # noqa: PLW0603
     if _active_discovery is not None:
         raise RuntimeError("Discovery service already created")
     service = DiscoveryService(

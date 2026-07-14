@@ -2,7 +2,8 @@
 set -e
 cd "$(dirname "$0")/.."
 uv sync --frozen --all-extras --group dev
-uv run pylint pizone
+uv run ruff check pizone tests
+uv run ruff format --check pizone tests
 uv run mypy pizone
 uv run pytest tests/ -q
 uv build

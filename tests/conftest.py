@@ -1,10 +1,9 @@
 """Shared test fixtures and network-free controller doubles."""
 
-# pylint: disable=protected-access
-import json
 from asyncio import Event, wait_for
 from collections.abc import AsyncIterator
 from copy import deepcopy
+import json
 from typing import Any, cast
 
 import pytest
@@ -108,9 +107,7 @@ class MockDiscoveryService(DiscoveryService):
         """Avoid network traffic during tests."""
 
 
-async def _register_mock_service(
-    svc: MockDiscoveryService, datagram: bytes
-) -> None:
+async def _register_mock_service(svc: MockDiscoveryService, datagram: bytes) -> None:
     class ListenerConnected(Listener):
         def __init__(self) -> None:
             self._controller: Controller | None = None

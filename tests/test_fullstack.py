@@ -2,7 +2,7 @@
 
 from asyncio import Event, wait_for
 
-from pytest import mark, raises
+import pytest
 
 from pizone import Controller, Listener, Zone, discovery
 
@@ -24,9 +24,7 @@ class ListenerTesting(Listener):
         self._connected.set()
         self.connect_count += 1
 
-    def controller_disconnected(
-        self, ctrl: Controller, ex: Exception
-    ) -> None:
+    def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
         if self._controller is not ctrl:
             return
         self._connected.clear()
@@ -65,21 +63,12 @@ def dump_data(ctrl: Controller) -> None:
             zone.temp_setpoint if zone.mode == Zone.Mode.AUTO else zone.mode.value
         )
         print(
-            (
-                "Name {0} type:{1} temp:{2} target:{3} "
-                + "airflow_min:{4} airflow_max:{5}"
-            ).format(
-                zone.name,
-                zone.type.value,
-                zone.temp_current,
-                zone_target,
-                zone.airflow_min,
-                zone.airflow_max,
-            )
+            f"Name {zone.name} type:{zone.type.value} temp:{zone.temp_current} target:{zone_target} "
+            f"airflow_min:{zone.airflow_min} airflow_max:{zone.airflow_max}"
         )
 
 
-@mark.hardware
+@pytest.mark.hardware
 async def test_full_stack() -> None:
     listener = ListenerTesting()
 
@@ -106,13 +95,13 @@ async def test_full_stack() -> None:
             nmin = 20 if old_airflow_min == 10 else 10
             await ctrl.zones[1].set_airflow_min(nmin)
 
-            with raises(AttributeError):
+            with pytest.raises(AttributeError):
                 await ctrl.zones[1].set_airflow_min(41)
 
-            with raises(AttributeError):
+            with pytest.raises(AttributeError):
                 await ctrl.zones[1].set_airflow_min(-1)
 
-            with raises(AttributeError):
+            with pytest.raises(AttributeError):
                 await ctrl.zones[1].set_airflow_min(105)
 
             assert ctrl.zones[1].airflow_min == nmin
@@ -121,13 +110,13 @@ async def test_full_stack() -> None:
             nmax = 80 if old_airflow_max == 90 else 90
             await ctrl.zones[1].set_airflow_max(nmax)
 
-            with raises(AttributeError):
+            with pytest.raises(AttributeError):
                 await ctrl.zones[1].set_airflow_max(41)
 
-            with raises(AttributeError):
+            with pytest.raises(AttributeError):
                 await ctrl.zones[1].set_airflow_max(-1)
 
-            with raises(AttributeError):
+            with pytest.raises(AttributeError):
                 await ctrl.zones[1].set_airflow_max(105)
 
             assert ctrl.zones[1].airflow_max == nmax
@@ -150,7 +139,7 @@ async def test_full_stack() -> None:
         dump_data(ctrl)
 
 
-@mark.hardware
+@pytest.mark.hardware
 async def test_reconnect() -> None:
     listener = ListenerTesting()
 
@@ -161,8 +150,8 @@ async def test_reconnect() -> None:
 
         # Reconnect is driven by _refresh_address scheduling _retry_connection
         # on the poll loop after the IP is restored.
-        ctrl._ip = "bababa"  # pylint: disable=protected-access
-        with raises(ConnectionError):
+        ctrl._ip = "bababa"
+        with pytest.raises(ConnectionError):
             await ctrl.set_sleep_timer(30)
 
         # Should reconnect here
@@ -173,7 +162,7 @@ async def test_reconnect() -> None:
         await ctrl.set_sleep_timer(0)
 
 
-@mark.hardware
+@pytest.mark.hardware
 async def test_power() -> None:
     listener = ListenerTesting()
 

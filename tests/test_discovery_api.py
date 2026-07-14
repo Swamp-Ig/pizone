@@ -1,22 +1,25 @@
 """Tests for the pizone 1.4 discovery API."""
 
-# pylint: disable=protected-access
 import asyncio
 import sys
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from aiohttp import ClientSession
-from pytest import raises
+import pytest
 
-from pizone import Controller, ControllerCommandError, ControllerEndpoint, create_discovery
+from pizone import (
+    Controller,
+    ControllerCommandError,
+    ControllerEndpoint,
+    create_discovery,
+)
 from pizone.discovery import DiscoveryService
-
-discovery_module = sys.modules["pizone.discovery"]
 
 from .conftest import MockController, MockDiscoveryService
 from .http_fakes import FakeHttpResponse, FakeHttpSession
+
+discovery_module = sys.modules["pizone.discovery"]
 
 
 def _system_settings(uid: str) -> dict[str, object]:
@@ -34,9 +37,7 @@ def _system_settings_response(uid: str) -> FakeHttpResponse:
     return FakeHttpResponse(200, json_data=_system_settings(uid))
 
 
-def _probe_result(
-    uid: str, host: str
-) -> tuple[ControllerEndpoint, dict[str, object]]:
+def _probe_result(uid: str, host: str) -> tuple[ControllerEndpoint, dict[str, object]]:
     return ControllerEndpoint(uid=uid, host=host), _system_settings(uid)
 
 
@@ -50,7 +51,7 @@ async def test_create_discovery_singleton() -> None:
     ):
         disco = await create_discovery()
         assert disco is discovery_module._active_discovery
-        with raises(RuntimeError, match="already created"):
+        with pytest.raises(RuntimeError, match="already created"):
             await create_discovery()
         await disco.close()
     assert discovery_module._active_discovery is None
@@ -109,7 +110,7 @@ async def test_discover_by_host_raises_if_controller_exists() -> None:
         ClientSession,
         FakeHttpSession(get_error=OSError("should not probe")),
     )
-    with raises(RuntimeError, match="already created"):
+    with pytest.raises(RuntimeError, match="already created"):
         await service.discover_by_host("10.0.0.90")
     await service.close()
 
@@ -147,9 +148,11 @@ async def test_discover_by_uid_raises_if_controller_exists() -> None:
     )
     await service.create_controller("000025841", "10.0.0.90")
     scan = AsyncMock()
-    with patch.object(service, "scan", scan):
-        with raises(RuntimeError, match="already created"):
-            await service.discover_by_uid("000025841")
+    with (
+        patch.object(service, "scan", scan),
+        pytest.raises(RuntimeError, match="already created"),
+    ):
+        await service.discover_by_uid("000025841")
     scan.assert_not_awaited()
     await service.close()
 
@@ -254,7 +257,7 @@ async def test_create_controller_raises_if_uid_exists() -> None:
         FakeHttpSession(get_response=_system_settings_response("000025841")),
     )
     await service.create_controller("000025841", "10.0.0.90")
-    with raises(RuntimeError, match="already created"):
+    with pytest.raises(RuntimeError, match="already created"):
         await service.create_controller("000025841", "10.0.0.90")
     await service.close()
 
@@ -303,8 +306,9 @@ async def test_create_controller_address_changed_after_return() -> None:
     async def discover_by_uid(_uid: str) -> ControllerEndpoint | None:
         return ControllerEndpoint(uid="000025841", host="10.0.0.90")
 
-    with patch.object(service, "discover_by_uid", side_effect=discover_by_uid):
-        with patch.object(
+    with (
+        patch.object(service, "discover_by_uid", side_effect=discover_by_uid),
+        patch.object(
             service,
             "_probe",
             AsyncMock(
@@ -313,17 +317,18 @@ async def test_create_controller_address_changed_after_return() -> None:
                     _probe_result("000025841", "10.0.0.90"),
                 ]
             ),
-        ):
-            with patch.object(
-                MockController,
-                "_initialize",
-                AsyncMock(),
-            ):
-                returned = await service.create_controller(
-                    "000025841",
-                    "10.0.0.1",
-                    on_address_changed=seen.append,
-                )
+        ),
+        patch.object(
+            MockController,
+            "_initialize",
+            AsyncMock(),
+        ),
+    ):
+        returned = await service.create_controller(
+            "000025841",
+            "10.0.0.1",
+            on_address_changed=seen.append,
+        )
 
     assert returned is not None
     assert returned.device_uid == "000025841"
@@ -340,13 +345,15 @@ async def test_create_controller_no_retry_on_command_error() -> None:
         FakeHttpSession(get_response=_system_settings_response("000025841")),
     )
     discover_by_uid = AsyncMock()
-    with patch.object(service, "discover_by_uid", discover_by_uid):
-        with patch.object(
+    with (
+        patch.object(service, "discover_by_uid", discover_by_uid),
+        patch.object(
             Controller,
             "_initialize",
             AsyncMock(side_effect=ControllerCommandError("rejected")),
-        ):
-            with raises(ControllerCommandError):
-                await service.create_controller("000025841", "10.0.0.90")
+        ),
+        pytest.raises(ControllerCommandError),
+    ):
+        await service.create_controller("000025841", "10.0.0.90")
     discover_by_uid.assert_not_awaited()
     await service.close()

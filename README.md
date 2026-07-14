@@ -42,7 +42,8 @@ The iZone Ethernet interface is documented in
 Individual commands:
 
 - `uv run pytest tests/`
-- `uv run pylint pizone`
+- `uv run ruff check pizone tests`
+- `uv run ruff format pizone tests`
 - `uv run mypy pizone`
 - `uv build`
 

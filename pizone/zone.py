@@ -1,5 +1,4 @@
-"""
-Zone interface.
+"""Zone interface.
 
 Properties for reading and setting zone data.
 """
@@ -32,9 +31,9 @@ class Zone:
 
         Possible values are:
 
-        ``auto`` – the zone has temperature control enabled
-        ``opcl`` – the zone is open/close only
-        ``const`` – the zone is a constant zone
+        ``auto`` - the zone has temperature control enabled
+        ``opcl`` - the zone is open/close only
+        ``const`` - the zone is a constant zone
         """
 
         AUTO = "auto"
@@ -46,9 +45,9 @@ class Zone:
 
         Possible values are:
 
-        ``open`` – the zone is currently open
-        ``close`` – the zone is currently closed
-        ``auto`` – the zone is currently in temperature control mode
+        ``open`` - the zone is currently open
+        ``close`` - the zone is currently closed
+        ``auto`` - the zone is currently in temperature control mode
         """
 
         OPEN = "open"
@@ -80,6 +79,7 @@ class Zone:
 
         Raises:
             ValueError: If the cached value is not a valid :class:`Type` member.
+
         """
         return self.Type(self._get_zone_state("Type"))
 
@@ -89,6 +89,7 @@ class Zone:
 
         Raises:
             ValueError: If the cached value is not a valid :class:`Mode` member.
+
         """
         return self.Mode(self._get_zone_state("Mode"))
 
@@ -118,6 +119,7 @@ class Zone:
         Raises:
             AttributeError: If the value is out of range or not divisible by 5.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if value % 5 != 0:
             raise AttributeError(f"MinAir '{value}' not rounded to nearest 5")
@@ -134,6 +136,7 @@ class Zone:
         Raises:
             AttributeError: If the value is out of range or not divisible by 5.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if value % 5 != 0:
             raise AttributeError(f"MaxAir '{value}' not rounded to nearest 5")
@@ -154,6 +157,7 @@ class Zone:
             AttributeError: If the zone is not temperature controlled or the
                 value is out of range.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if self.type != Zone.Type.AUTO:
             raise AttributeError(f"Can't set SetPoint to '{self.type}' type zone.")
@@ -173,6 +177,7 @@ class Zone:
         Raises:
             AttributeError: If auto mode is requested on an open/close zone.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if value == Zone.Mode.AUTO:
             if self.type != Zone.Type.AUTO:
@@ -189,6 +194,7 @@ class Zone:
 
         Raises:
             AttributeError: If the response index does not match this zone.
+
         """
         if zone_data["Index"] != self._index:
             raise AttributeError("Can't change index of existing zone.")
@@ -199,18 +205,17 @@ class Zone:
             self._fire_listeners()
 
     def _fire_listeners(self) -> None:
-        # pylint: disable=protected-access
-        self._controller._event_coordinator.zone_update(self._controller, self)
+        self._controller._event_coordinator.zone_update(self._controller, self)  # noqa: SLF001
 
     def _get_zone_state(self, state: str) -> DictValue:
         return self._zone_data[state]
 
-    async def _send_command(self, command: str, data: str | float | int) -> None:
+    async def _send_command(self, command: str, data: str | float) -> None:
         """Send a zone command via the parent controller.
 
         Raises:
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}
-        # pylint: disable=protected-access
-        await self._controller._send_command_async(command, send_data)
+        await self._controller._send_command_async(command, send_data)  # noqa: SLF001

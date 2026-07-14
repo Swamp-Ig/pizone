@@ -23,8 +23,10 @@ jobs:
           cache-suffix: build
       - name: Install dependencies
         run: uv sync --frozen --all-extras --group dev
-      - name: Lint with Pylint
-        run: uv run pylint pizone
+      - name: Lint with Ruff
+        run: |
+          uv run ruff check pizone tests
+          uv run ruff format --check pizone tests
       - name: Type check with mypy
         run: uv run mypy pizone
       - name: Test with pytest

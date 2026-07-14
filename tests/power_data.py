@@ -29,9 +29,27 @@ POWER_CONFIG = {
                 "Enabled": 0,
                 "Name": "",
                 "Channels": [
-                    {"Enabled": 0, "Name": "", "GrNo": 255, "Generate": 0, "AddToTotal": 0},
-                    {"Enabled": 0, "Name": "", "GrNo": 255, "Generate": 0, "AddToTotal": 0},
-                    {"Enabled": 0, "Name": "", "GrNo": 255, "Generate": 0, "AddToTotal": 0},
+                    {
+                        "Enabled": 0,
+                        "Name": "",
+                        "GrNo": 255,
+                        "Generate": 0,
+                        "AddToTotal": 0,
+                    },
+                    {
+                        "Enabled": 0,
+                        "Name": "",
+                        "GrNo": 255,
+                        "Generate": 0,
+                        "AddToTotal": 0,
+                    },
+                    {
+                        "Enabled": 0,
+                        "Name": "",
+                        "GrNo": 255,
+                        "Generate": 0,
+                        "AddToTotal": 0,
+                    },
                 ],
             }
             for _ in range(4)

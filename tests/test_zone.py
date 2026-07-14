@@ -1,10 +1,8 @@
 """Tests for zone property reads and command validation."""
 
-# pylint: disable=protected-access
 from typing import cast
 
 import pytest
-from pytest import raises
 
 from pizone import Zone
 
@@ -89,9 +87,9 @@ async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
 async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
 
-    with raises(AttributeError, match="not rounded to nearest 5"):
+    with pytest.raises(AttributeError, match="not rounded to nearest 5"):
         await zone.set_airflow_min(41)
-    with raises(AttributeError, match="out of range"):
+    with pytest.raises(AttributeError, match="out of range"):
         await zone.set_airflow_min(110)
 
 
@@ -99,9 +97,9 @@ async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None
 async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
 
-    with raises(AttributeError, match="not rounded to nearest 5"):
+    with pytest.raises(AttributeError, match="not rounded to nearest 5"):
         await zone.set_airflow_max(41)
-    with raises(AttributeError, match="out of range"):
+    with pytest.raises(AttributeError, match="out of range"):
         await zone.set_airflow_max(110)
 
 
@@ -112,11 +110,11 @@ async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> No
     opcl = controller.zones[2]
     opcl._zone_data["Type"] = "opcl"
 
-    with raises(AttributeError, match="Can't set SetPoint"):
+    with pytest.raises(AttributeError, match="Can't set SetPoint"):
         await opcl.set_temp_setpoint(22.0)
-    with raises(AttributeError, match="not rounded to nearest 0.5"):
+    with pytest.raises(AttributeError, match="not rounded to nearest 0.5"):
         await zone.set_temp_setpoint(22.3)
-    with raises(AttributeError, match="out of range"):
+    with pytest.raises(AttributeError, match="out of range"):
         await zone.set_temp_setpoint(35.0)
 
 
@@ -126,7 +124,7 @@ async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None
     zone = controller.zones[2]
     zone._zone_data["Type"] = "opcl"
 
-    with raises(AttributeError, match="Can't use auto mode on open/close zone"):
+    with pytest.raises(AttributeError, match="Can't use auto mode on open/close zone"):
         await zone.set_mode(Zone.Mode.AUTO)
 
 
@@ -136,5 +134,5 @@ async def test_update_zone_index_mismatch(service: MockDiscoveryService) -> None
     bad_data = dict(zone._zone_data)
     bad_data["Index"] = 99
 
-    with raises(AttributeError, match="Can't change index"):
+    with pytest.raises(AttributeError, match="Can't change index"):
         zone._update_zone(bad_data, notify=False)

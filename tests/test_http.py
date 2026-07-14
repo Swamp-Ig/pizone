@@ -1,12 +1,10 @@
 """Tests for controller HTTP GET/POST internals."""
 
-# pylint: disable=protected-access
 from typing import cast
 
 import aiohttp
-import pytest
 from aiohttp import ClientSession
-from pytest import raises
+import pytest
 
 from pizone import Controller, ControllerCommandError, ResponseDecodeError
 
@@ -59,7 +57,7 @@ async def test_get_resource_http_404(service: MockDiscoveryService) -> None:
         FakeHttpSession(get_response=FakeHttpResponse(404, "404: File not found")),
     )
     try:
-        with raises(ControllerCommandError):
+        with pytest.raises(ControllerCommandError):
             await controller._get_resource("SystemSettings")
     finally:
         service._session = original_session
@@ -98,7 +96,7 @@ async def test_get_resource_decode_failure(service: MockDiscoveryService) -> Non
         ),
     )
     try:
-        with raises(ResponseDecodeError):
+        with pytest.raises(ResponseDecodeError):
             await controller._get_resource("SystemSettings")
     finally:
         service._session = original_session
@@ -113,7 +111,7 @@ async def test_get_resource_no_session(service: MockDiscoveryService) -> None:
     original_session = service._session
     service._session = None
     try:
-        with raises(ConnectionError, match="Discovery service is not started"):
+        with pytest.raises(ConnectionError, match="Discovery service is not started"):
             await controller._get_resource("SystemSettings")
     finally:
         service._session = original_session
@@ -128,7 +126,7 @@ async def test_get_resource_transport_error(service: MockDiscoveryService) -> No
         FakeHttpSession(get_error=aiohttp.ClientError("network down")),
     )
     try:
-        with raises(ConnectionError):
+        with pytest.raises(ConnectionError):
             await controller._get_resource("SystemSettings")
     finally:
         service._session = original_session
@@ -145,7 +143,7 @@ async def test_send_command_http_500(service: MockDiscoveryService) -> None:
         FakeHttpSession(post_response=FakeHttpResponse(500, "server error")),
     )
     try:
-        with raises(ConnectionError):
+        with pytest.raises(ConnectionError):
             await controller._send_command_async("SystemMODE", {"SystemMODE": "cool"})
     finally:
         service._session = original_session
@@ -162,7 +160,9 @@ async def test_send_command_ok_suffix(service: MockDiscoveryService) -> None:
         FakeHttpSession(post_response=FakeHttpResponse(200, "payload{OK}")),
     )
     try:
-        result = await controller._send_command_async("SystemMODE", {"SystemMODE": "cool"})
+        result = await controller._send_command_async(
+            "SystemMODE", {"SystemMODE": "cool"}
+        )
     finally:
         service._session = original_session
 

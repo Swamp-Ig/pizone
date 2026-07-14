@@ -1,20 +1,18 @@
 """iZone controller interface."""
 
-from __future__ import annotations
-
 import asyncio
+from asyncio import Condition, Lock
+from collections.abc import Callable
+from enum import Enum
 import json
 import logging
-from asyncio import Condition, Lock
-from enum import Enum
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Self, cast
 
 import aiohttp
 
 from .exceptions import ControllerCommandError, ResponseDecodeError
-from .types import ControllerEndpoint
 from .power import Power
+from .types import ControllerEndpoint
 from .zone import Zone
 
 if TYPE_CHECKING:
@@ -210,6 +208,7 @@ class Controller:
         Raises:
             ConnectionError: If a required HTTP request fails.
             KeyError: If a required field is missing from a device response.
+
         """
         if system_settings is not None:
             settings = self._apply_system_settings(system_settings, notify=False)
@@ -251,7 +250,7 @@ class Controller:
             data = json.loads(response)
             uid = data["AirStreamDeviceUId"]
             self._is_v2 = uid == self._device_uid and "SystemV2" in data
-        except (ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError):
+        except ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError:
             self._is_v2 = False
 
     async def _probe_power(self) -> None:
@@ -270,7 +269,7 @@ class Controller:
                 "Power monitor disabled on uid=%s; skipping power support",
                 self._device_uid,
             )
-        except (ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError):
+        except ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError:
             _LOG.warning(
                 "Power monitor probe failed for uid=%s",
                 self._device_uid,
@@ -288,19 +287,18 @@ class Controller:
                         await self._scan_condition.wait()
                 # triggered rescan, short delay
                 await asyncio.sleep(Controller.UPDATE_REFRESH_DELAY)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
             if self._closed or self._discovery_service.is_closed:
                 return
 
-            # pylint: disable=broad-except
             try:
                 _LOG.debug("Polling unit %s.", self._device_uid)
                 await self._refresh_all()
             except ConnectionError:
                 _LOG.debug("Poll failed due to exception.", exc_info=True)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 _LOG.error("Unexpected exception", exc_info=True)
 
     async def refresh(self) -> None:
@@ -317,7 +315,7 @@ class Controller:
         if self._closed:
             return
         self._closed = True
-        self._discovery_service._controller_closed(self)  # pylint: disable=protected-access
+        self._discovery_service._controller_closed(self)  # noqa: SLF001
         async with self._scan_condition:
             self._scan_condition.notify()
 
@@ -371,6 +369,7 @@ class Controller:
 
         Raises:
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         await self._set_system_state("SysOn", "SystemON", "on" if value else "off")
 
@@ -390,6 +389,7 @@ class Controller:
         Raises:
             AttributeError: If free air mode is requested but not enabled.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if value == Controller.Mode.FREE_AIR:
             if self.free_air:
@@ -418,6 +418,7 @@ class Controller:
         Raises:
             AttributeError: If the requested fan mode is not allowed.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if value not in self.fan_modes:
             raise AttributeError(f"Fan mode {value.value} not allowed")
@@ -434,6 +435,7 @@ class Controller:
 
         Raises:
             TypeError: If the cached value is missing or not numeric.
+
         """
         return int(self._get_system_state("SleepTimer"))
 
@@ -445,6 +447,7 @@ class Controller:
         Raises:
             AttributeError: If the value is out of range or not divisible by 30.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         time = int(value)
         if time < 0 or time > 120 or time % 30 != 0:
@@ -469,6 +472,7 @@ class Controller:
         Raises:
             AttributeError: If the free air system is not enabled.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if not self.free_air_enabled:
             raise AttributeError("Free air is disabled")
@@ -501,6 +505,7 @@ class Controller:
         Raises:
             AttributeError: If the value is out of range or not rounded to 0.5.
             ConnectionError: If the device cannot be reached or the response is invalid.
+
         """
         if value % 0.5 != 0:
             raise AttributeError(f"SetPoint '{value}' not rounded to nearest 0.5")
@@ -549,6 +554,7 @@ class Controller:
 
         Raises:
             TypeError: If the cached value is missing or not numeric.
+
         """
         return int(self._get_system_state("CtrlZone"))
 
@@ -558,6 +564,7 @@ class Controller:
 
         Raises:
             TypeError: If the cached value is missing or not numeric.
+
         """
         return int(self._get_system_state("NoOfZones"))
 
@@ -584,6 +591,7 @@ class Controller:
         Raises:
             ConnectionError: If any HTTP request fails.
             KeyError: If a required field is missing from a device response.
+
         """
         zones = len(self.zones)
         if zones == 0:
@@ -607,6 +615,7 @@ class Controller:
         Raises:
             ConnectionError: If the HTTP request fails.
             KeyError: If the response is missing required fields.
+
         """
         values: Controller.ControllerData = await self._get_resource("SystemSettings")
         return self._apply_system_settings(values, notify=notify)
@@ -624,9 +633,7 @@ class Controller:
                 "iZone subsystem fault uid=%s; retaining cache",
                 self._device_uid,
             )
-            self._set_izone_ok(
-                False, ConnectionError("iZone controller unavailable")
-            )
+            self._set_izone_ok(False, ConnectionError("iZone controller unavailable"))
             if notify:
                 self._event_coordinator.controller_update(self)
             return values
@@ -646,7 +653,7 @@ class Controller:
 
         try:
             updated = await self._power.refresh()
-        except (ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError):
+        except ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError:
             _LOG.warning(
                 "Power refresh failed for uid=%s",
                 self._device_uid,
@@ -664,6 +671,7 @@ class Controller:
             ConnectionError: If any HTTP request fails.
             KeyError: If a response is missing required fields.
             AttributeError: If a zone index in the response does not match.
+
         """
         zones = len(self.zones)
         if zones == 0:
@@ -680,6 +688,7 @@ class Controller:
             KeyError: If the response is missing required fields.
             AttributeError: If a zone index in the response does not match.
             ValueError: If the zone group is not supported.
+
         """
         if group not in (0, 4, 8, 12):
             raise ValueError(f"Unsupported zone group start index {group}")
@@ -689,8 +698,7 @@ class Controller:
 
         for i in range(min(len(self.zones) - group, 4)):
             zone_data = zone_data_part[i]
-            # pylint: disable=protected-access
-            self.zones[i + group]._update_zone(zone_data, notify)
+            self.zones[i + group]._update_zone(zone_data, notify)  # noqa: SLF001
 
     def _refresh_address(self, address: str) -> None:
         """Update the device IP and schedule a reconnect attempt if needed."""
@@ -718,7 +726,10 @@ class Controller:
         value = self._system_settings.get(state)
         if value is None:
             return default
-        if state in ("SysFan", "RAS", "SysMode") and str(value) in self._FAULT_STATE_VALUES:
+        if (
+            state in ("SysFan", "RAS", "SysMode")
+            and str(value) in self._FAULT_STATE_VALUES
+        ):
             return default
         return value
 
@@ -733,6 +744,7 @@ class Controller:
 
         Raises:
             ConnectionError: If the HTTP request fails.
+
         """
         if send is None:
             send = value
@@ -808,6 +820,7 @@ class Controller:
             ConnectionError: If the device cannot be reached.
             ResponseDecodeError: If the response cannot be decoded as JSON.
             ControllerCommandError: If the device returns HTTP 4xx.
+
         """
         session = self._discovery_service.session
         if session is None:
@@ -841,6 +854,7 @@ class Controller:
             ConnectionError: If the device cannot be reached or the HTTP request fails.
             ControllerCommandError: If the device returns HTTP 4xx or an
                 ``{ERROR...}`` payload.
+
         """
         session = self._discovery_service.session
         if session is None:
@@ -879,13 +893,14 @@ class Controller:
             ConnectionError: If the device cannot be reached or the HTTP request fails.
             ResponseDecodeError: If the response cannot be decoded as JSON.
             ControllerCommandError: If the device returns HTTP 4xx.
+
         """
         try:
             result = await self._http_get(resource)
         except ControllerCommandError:
             self._set_bridge_ok(True)
             raise
-        except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
+        except (TimeoutError, aiohttp.ClientError) as ex:
             self._set_bridge_ok(
                 False, ConnectionError("Unable to connect to the controller")
             )
@@ -906,13 +921,14 @@ class Controller:
             ConnectionError: If the device cannot be reached or the HTTP request fails.
             ControllerCommandError: If the device returns HTTP 4xx or an
                 ``{ERROR...}`` payload.
+
         """
         try:
             result = await self._http_post(command, data)
         except ControllerCommandError:
             self._set_bridge_ok(True)
             raise
-        except (asyncio.TimeoutError, aiohttp.ClientError) as ex:
+        except (TimeoutError, aiohttp.ClientError) as ex:
             self._set_bridge_ok(
                 False, ConnectionError("Unable to connect to controller")
             )

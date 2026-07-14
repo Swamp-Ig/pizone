@@ -2,6 +2,7 @@
 
 import json
 from types import TracebackType
+from typing import Self
 
 
 class FakeHttpResponse:
@@ -16,7 +17,13 @@ class FakeHttpResponse:
         json_error: bool = False,
     ) -> None:
         self.status = status
-        self.reason = "Not Found" if status == 404 else "Internal Server Error" if status == 500 else "OK"
+        self.reason = (
+            "Not Found"
+            if status == 404
+            else "Internal Server Error"
+            if status == 500
+            else "OK"
+        )
         self._body = body
         self._json_data = json_data
         self._json_error = json_error
@@ -33,7 +40,7 @@ class FakeHttpResponse:
         del encoding
         return self._body
 
-    async def __aenter__(self) -> FakeHttpResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(

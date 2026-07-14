@@ -1,15 +1,12 @@
-"""
-Power monitor interface.
+"""Power monitor interface.
 
 Properties for reading power monitoring configuration and status data.
 """
 
-from __future__ import annotations
-
+from collections.abc import Iterable
+from enum import IntEnum, unique
 import json
 import logging
-from enum import IntEnum, unique
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from .exceptions import ControllerCommandError
@@ -46,13 +43,11 @@ class PowerChannel:
 
     @property
     def _config(self) -> dict[str, Any]:
-        # pylint: disable=protected-access
-        return cast(dict[str, Any], self._device._config["Channels"][self._index])
+        return cast(dict[str, Any], self._device._config["Channels"][self._index])  # noqa: SLF001
 
     @property
     def _status(self) -> dict[str, Any]:
-        # pylint: disable=protected-access
-        return cast(dict[str, Any], self._device._status["Ch"][self._index])
+        return cast(dict[str, Any], self._device._status["Ch"][self._index])  # noqa: SLF001
 
     @property
     def device(self) -> PowerDevice:
@@ -106,13 +101,11 @@ class PowerDevice:
 
     @property
     def _config(self) -> dict[str, Any]:
-        # pylint: disable=protected-access
-        return cast(dict[str, Any], self._power._config["Devices"][self._index])
+        return cast(dict[str, Any], self._power._config["Devices"][self._index])  # noqa: SLF001
 
     @property
     def _status(self) -> dict[str, Any]:
-        # pylint: disable=protected-access
-        return cast(dict[str, Any], self._power._status["Dev"][self._index])
+        return cast(dict[str, Any], self._power._status["Dev"][self._index])  # noqa: SLF001
 
     @property
     def index(self) -> int:
@@ -205,6 +198,7 @@ class Power:
             ConnectionError: If the HTTP request fails.
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing required fields.
+
         """
         self._config = await self._do_request(1, "PowerMonitorConfig")
         gdict: dict[int, list[PowerChannel]] = {}
@@ -224,6 +218,7 @@ class Power:
             ConnectionError: If the HTTP request fails.
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing required fields.
+
         """
         status: dict[str, Any] = await self._do_request(2, "PowerMonitorStatus")
 
@@ -240,13 +235,13 @@ class Power:
             ConnectionError: If the HTTP request fails.
             json.JSONDecodeError: If the device response is not valid JSON.
             KeyError: If the response is missing *result*.
+
         """
         if not self._controller.bridge_connected:
             self._set_power_ok(False)
             raise ConnectionError("Bridge not connected")
         try:
-            # pylint: disable=protected-access
-            datas = await self._controller._http_post(
+            datas = await self._controller._http_post(  # noqa: SLF001
                 "PowerRequest",
                 {"PowerRequest": {"Type": req_type, "No": 0, "No1": 0}},
             )
@@ -273,8 +268,7 @@ class Power:
         if self._power_ok == ok:
             return
         self._power_ok = ok
-        # pylint: disable=protected-access
-        self._controller._event_coordinator.power_update(self._controller)
+        self._controller._event_coordinator.power_update(self._controller)  # noqa: SLF001
 
     @property
     def connected(self) -> bool:

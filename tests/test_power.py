@@ -1,6 +1,5 @@
 """Tests for iPower configuration and status handling."""
 
-# pylint: disable=protected-access
 import json
 from typing import Any, cast
 

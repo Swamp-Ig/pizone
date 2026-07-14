@@ -1,14 +1,12 @@
 """Tests for discovery, controller refresh, and reconnect behavior."""
 
-# pylint: disable=protected-access
 import asyncio
 from asyncio import sleep
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from aiohttp import ClientSession
-from pytest import raises
+import pytest
 
 from pizone import Controller, ControllerCommandError, Listener, Zone, discovery
 from pizone.discovery import DiscoveryService
@@ -223,7 +221,7 @@ async def test_disconnected_reads_return_cached_state(
     assert controller.mode == Controller.Mode.HEAT
     assert controller.zones[0].name == "LIVING"
 
-    with raises(ConnectionError):
+    with pytest.raises(ConnectionError):
         await controller.set_mode(Controller.Mode.COOL)
 
 
@@ -237,7 +235,7 @@ async def test_reconnect(
 
     controller._failed_connection(ConnectionError("Fake connection error"))
     controller.sent.clear()
-    with raises(ConnectionError):
+    with pytest.raises(ConnectionError):
         await controller.set_mode(Controller.Mode.COOL)
 
     assert caplog.messages[0][:30] == "Connection to controller lost:"
@@ -280,7 +278,7 @@ async def test_reconnect_listener(service: MockDiscoveryService) -> None:
     assert calls[-1] == ("discovered", controller)
 
     controller._failed_connection(ConnectionError("Fake connection error"))
-    with raises(ConnectionError):
+    with pytest.raises(ConnectionError):
         await controller.set_mode(Controller.Mode.COOL)
 
     assert len(calls) == 2
@@ -306,7 +304,7 @@ async def test_reconnect_listener(service: MockDiscoveryService) -> None:
     service.remove_listener(listener)
 
     controller._failed_connection(ConnectionError("Fake connection error"))
-    with raises(ConnectionError):
+    with pytest.raises(ConnectionError):
         await controller.set_mode(Controller.Mode.COOL)
 
     assert len(calls) == 4
@@ -532,7 +530,7 @@ async def test_send_command_error_body_restores_connection(
         _FakeHttpSession(_FakeHttpResponse(200, "{ERROR:notImplementedYet")),
     )
     try:
-        with raises(ControllerCommandError):
+        with pytest.raises(ControllerCommandError):
             await controller._send_command_async(
                 "PowerRequest", {"PowerRequest": {"Type": 99, "No": 0, "No1": 0}}
             )
@@ -562,8 +560,10 @@ async def test_send_command_http_404_restores_connection(
         _FakeHttpSession(_FakeHttpResponse(404, "404: File not found")),
     )
     try:
-        with raises(ControllerCommandError):
-            await controller._send_command_async("NoSuchCommand", {"NoSuchCommand": "x"})
+        with pytest.raises(ControllerCommandError):
+            await controller._send_command_async(
+                "NoSuchCommand", {"NoSuchCommand": "x"}
+            )
     finally:
         service._session = original_session
 
@@ -597,7 +597,7 @@ async def test_send_command_error_fires_reconnected_listener(
         _FakeHttpSession(_FakeHttpResponse(200, "{ERROR:notImplementedYet")),
     )
     try:
-        with raises(ControllerCommandError):
+        with pytest.raises(ControllerCommandError):
             await controller._send_command_async(
                 "PowerRequest", {"PowerRequest": {"Type": 99, "No": 0, "No1": 0}}
             )
