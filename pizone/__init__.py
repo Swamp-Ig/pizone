@@ -1,7 +1,9 @@
 """Interface to the iZone air conditioner controller.
 
-Interaction is mostly through the :class:`~pizone.controller.Controller` and
-:class:`~pizone.zone.Zone` classes.
+Prefer :func:`~pizone.discovery.create_discovery` or
+:func:`~pizone.discovery.discovery` to obtain a discovery service, then create
+or discover :class:`~pizone.controller.Controller` instances through that
+service. Zones and power monitors are owned by their controller.
 
 Synchronous property reads return cached device data and do not raise
 :exc:`ConnectionError`. Async command and refresh methods perform HTTP I/O and

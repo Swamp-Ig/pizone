@@ -26,6 +26,10 @@ _LOG = logging.getLogger("pizone.controller")
 class Controller:
     """Interface to an iZone controller.
 
+    Obtain instances via :meth:`pizone.discovery.DiscoveryService.create_controller`
+    (1.4) or the legacy discovery listener / :meth:`~pizone.discovery.DiscoveryService.fetch_controller`
+    path. Do not construct controllers directly in application code.
+
     **Reading state:** properties and other synchronous accessors return the
     last cached values from the device. They do not perform I/O and do not
     raise :exc:`ConnectionError` when :attr:`connected` is ``False``. Check
@@ -112,17 +116,10 @@ class Controller:
         is_v2: bool,
         is_ipower: bool,
     ) -> None:
-        """Create a controller interface.
+        """Set up controller fields.
 
-        This is usually called from the discovery service.
-
-        Args:
-            device_uid: Controller UID as a string (for example, ``000013170``).
-            device_ip: Device IP address.
-
-        Property reads return cached data and do not raise when disconnected;
-        check :attr:`connected` or handle :exc:`ConnectionError` from async
-        methods instead.
+        Prefer :meth:`create` or :meth:`from_discovery`. Application code should
+        not call this directly.
         """
         self._ip = device_ip
         self._discovery_service = discovery_service
@@ -145,6 +142,34 @@ class Controller:
         self._sending_lock = Lock()
         self._scan_condition = Condition()
 
+    # disposition: deprecate
+    @classmethod
+    def from_discovery(
+        cls,
+        discovery_service: DiscoveryService,
+        event_coordinator: Listener,
+        *,
+        device_uid: str,
+        device_ip: str,
+        is_v2: bool,
+        is_ipower: bool,
+    ) -> Self:
+        """Construct a controller for the legacy passive-discovery track.
+
+        Prefer obtaining controllers through :func:`~pizone.discovery.discovery`
+        and the listener / :meth:`~pizone.discovery.DiscoveryService.fetch_controller`
+        path rather than calling this from application code. The caller must await
+        :meth:`_initialize` before using the instance.
+        """
+        return cls(
+            discovery_service,
+            event_coordinator,
+            device_uid=device_uid,
+            device_ip=device_ip,
+            is_v2=is_v2,
+            is_ipower=is_ipower,
+        )
+
     # disposition: 1.4
     @classmethod
     async def create(
@@ -158,7 +183,9 @@ class Controller:
     ) -> Self:
         """Create and initialize a controller from an HTTP probe result.
 
-        1.4 path only; legacy code uses ``__init__`` plus ``_initialize()``.
+        Prefer :meth:`~pizone.discovery.DiscoveryService.create_controller` on a
+        service from :func:`~pizone.discovery.create_discovery` rather than
+        calling this from application code.
         """
         controller = cls(
             discovery_service,

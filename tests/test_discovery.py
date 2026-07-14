@@ -516,7 +516,7 @@ class _FakeHttpSession(FakeHttpSession):
 async def test_send_command_error_body_restores_connection(
     service: MockDiscoveryService,
 ) -> None:
-    controller = Controller(
+    controller = Controller.from_discovery(
         service,
         service._event_coordinator,
         device_uid="000000099",
@@ -546,7 +546,7 @@ async def test_send_command_error_body_restores_connection(
 async def test_send_command_http_404_restores_connection(
     service: MockDiscoveryService,
 ) -> None:
-    controller = Controller(
+    controller = Controller.from_discovery(
         service,
         service._event_coordinator,
         device_uid="000000099",
@@ -580,7 +580,7 @@ async def test_send_command_error_fires_reconnected_listener(
         def controller_reconnected(self, ctrl: Controller) -> None:
             calls.append(("reconnected", ctrl))
 
-    controller = Controller(
+    controller = Controller.from_discovery(
         service,
         service._event_coordinator,
         device_uid="000000099",

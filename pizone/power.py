@@ -175,6 +175,10 @@ class PowerGroup:
 class Power:
     """Power monitor data for an iZone controller.
 
+    Owned by a :class:`~pizone.controller.Controller`. Obtain via
+    :attr:`~pizone.controller.Controller.power` after the controller has
+    initialized; do not construct in application code.
+
     **Reading state:** properties return cached configuration and status data.
     They do not perform I/O.
 
@@ -186,7 +190,7 @@ class Power:
     """
 
     def __init__(self, controller: Controller) -> None:
-        """Create a power monitor interface for *controller*."""
+        """Attach this power monitor to *controller*. Used by the controller only."""
         self._controller = controller
         self._config: dict[str, Any] = {}
         self._status: dict[str, Any] = {"LastReadingNo": -1}

@@ -109,7 +109,11 @@ class Listener:
 
 
 class DiscoveryService:
-    """Discovery service for the controller registry, listener fan-out, and UDP scanning."""
+    """UDP discovery, endpoint registry, and controller factory.
+
+    Obtain via :func:`create_discovery` (1.4) or :func:`discovery` (legacy).
+    Direct construction is for tests and subclasses.
+    """
 
     _controller_cls: type[Controller] = Controller
 
@@ -120,6 +124,9 @@ class DiscoveryService:
         on_endpoint_discovered: Callable[[ControllerEndpoint], None] | None = None,
     ) -> None:
         """Create a discovery service.
+
+        Prefer :func:`create_discovery` or :func:`discovery` instead of calling
+        this directly.
 
         Call :meth:`start_discovery` or use the service as an async context
         manager to begin scanning.
@@ -485,8 +492,9 @@ class DiscoveryService:
     ) -> Controller:
         """Create and initialize a controller at the given address.
 
-        One-shot per UID. HTTP probe is the trust boundary; callers must handle
-        the device being unreachable even after a recent discovery notify.
+        Preferred 1.4 entry point after :func:`create_discovery`. One-shot per
+        UID. HTTP probe is the trust boundary; callers must handle the device
+        being unreachable even after a recent discovery notify.
 
         Raises:
             RuntimeError: If a controller with *uid* already exists.
@@ -820,7 +828,7 @@ class DiscoveryService:
     def _create_controller(
         self, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
     ) -> Controller:
-        return self._controller_cls(
+        return self._controller_cls.from_discovery(
             self,
             self._event_coordinator,
             device_uid=device_uid,
@@ -834,7 +842,12 @@ class DiscoveryService:
 def discovery(
     *listeners: Listener, session: ClientSession | None = None
 ) -> DiscoveryService:
-    """Create a discovery service.
+    """Create a legacy discovery service.
+
+    Preferred entry point for the legacy track. Prefer
+    :func:`create_discovery` for new code. Controllers appear via listeners
+    and :meth:`DiscoveryService.fetch_controller`; do not construct them
+    directly.
 
     The returned object is an async context manager and can also be started
     manually with :meth:`DiscoveryService.start_discovery`.
@@ -873,6 +886,10 @@ async def create_discovery(
     session: ClientSession | None = None,
 ) -> DiscoveryService:
     """Create the process-global discovery service.
+
+    Preferred 1.4 entry point. Use :meth:`DiscoveryService.create_controller`
+    (and the ``discover_*`` helpers) on the returned service; do not construct
+    :class:`~pizone.controller.Controller` instances directly.
 
     Args:
         on_endpoint_discovered: Called for each newly discovered endpoint.

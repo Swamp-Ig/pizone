@@ -15,7 +15,7 @@ from .http_fakes import FakeHttpResponse, FakeHttpSession
 
 
 def _make_controller(service: MockDiscoveryService) -> Controller:
-    controller = Controller(
+    controller = Controller.from_discovery(
         service,
         service._event_coordinator,
         device_uid="000000099",

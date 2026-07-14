@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 class Zone:
     """Interface to an iZone zone.
 
+    Owned by a :class:`~pizone.controller.Controller`. Obtain zones from
+    :attr:`~pizone.controller.Controller.zones`; do not construct in
+    application code.
+
     **Reading state:** properties return cached zone data and do not perform
     I/O. They do not raise :exc:`ConnectionError` when the parent controller
     is disconnected.
@@ -55,6 +59,7 @@ class Zone:
     ZoneData = dict[str, DictValue]
 
     def __init__(self, controller: Controller, index: int) -> None:
+        """Attach this zone to *controller*. Used by the controller only."""
         self._zone_data: Zone.ZoneData = {}
         self._index = index
         self._controller = controller

@@ -434,7 +434,7 @@ async def test_v2_probe_failure_leaves_bridge_ok(service: MockDiscoveryService) 
 async def test_init_fault_disconnect_listener() -> None:
     listener = _DisconnectListener()
     svc = MockDiscoveryService()
-    controller = MockController(
+    controller = MockController.from_discovery(
         svc,
         listener,
         device_uid="000000004",
@@ -455,7 +455,7 @@ async def test_init_fault_disconnect_listener() -> None:
 async def test_init_fault_property_reads_no_crash() -> None:
     listener = _DisconnectListener()
     svc = MockDiscoveryService()
-    controller = MockController(
+    controller = MockController.from_discovery(
         svc,
         listener,
         device_uid="000000005",
