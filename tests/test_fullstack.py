@@ -163,6 +163,7 @@ async def test_reconnect() -> None:
 
 
 @pytest.mark.hardware
+@pytest.mark.usefixtures("enable_power")
 async def test_power() -> None:
     listener = ListenerTesting()
 

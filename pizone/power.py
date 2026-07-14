@@ -1,6 +1,15 @@
 """Power monitor interface.
 
 Properties for reading power monitoring configuration and status data.
+
+Power HTTP is opt-in. Set :data:`~pizone.ENABLE_POWER` (or
+``pizone.power.ENABLE_POWER``) to ``True`` before creating or refreshing
+controllers when a consumer needs the iPower interface::
+
+    import pizone
+    pizone.ENABLE_POWER = True
+
+While ``False`` (the default), controllers skip power probe and refresh I/O.
 """
 
 from collections.abc import Iterable
@@ -15,6 +24,9 @@ if TYPE_CHECKING:
     from .controller import Controller
 
 _LOG = logging.getLogger("pizone.power")
+
+ENABLE_POWER = False
+"""When ``False``, skip all power probe and refresh HTTP. Flip at runtime to opt in."""
 
 
 @unique

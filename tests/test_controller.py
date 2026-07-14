@@ -142,25 +142,49 @@ async def test_refresh_all(service: MockDiscoveryService) -> None:
 
 
 @pytest.mark.asyncio
-async def test_initialize_succeeds_when_power_init_fails() -> None:
+async def test_power_disabled_by_default_skips_power_request() -> None:
+    """With ENABLE_POWER False, an iPower hint must not trigger PowerRequest."""
     svc = MockDiscoveryService()
-    original_create = svc._create_controller
-
-    def create_controller(
-        device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
-    ) -> MockController:
-        controller = original_create(device_uid, device_ip, is_v2, is_ipower)
-        controller.fail_power_types.add(1)
-        return controller
-
-    svc._create_controller = create_controller
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000003",
+        device_ip="10.0.0.1",
+        is_v2=False,
+        is_ipower=True,
+    )
+    svc._controllers["000000003"] = controller
 
     try:
-        await _register_mock_service(
-            svc,
-            b"ASPort_12107,Mac_000000003,IP_10.0.0.1,iZone,iPower",
-        )
-        controller = cast(MockController, svc._controllers["000000003"])
+        await controller._initialize()
+
+        assert controller.power is None
+        assert controller.is_ipower is False
+        assert not any(command == "PowerRequest" for command, _ in controller.sent)
+
+        await controller._refresh_power(notify=False)
+        assert not any(command == "PowerRequest" for command, _ in controller.sent)
+    finally:
+        await svc.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_power")
+async def test_initialize_succeeds_when_power_init_fails() -> None:
+    svc = MockDiscoveryService()
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000003",
+        device_ip="10.0.0.1",
+        is_v2=False,
+        is_ipower=True,
+    )
+    controller.fail_power_types.add(1)
+    svc._controllers["000000003"] = controller
+
+    try:
+        await controller._initialize()
 
         assert controller.connected is True
         assert controller.power is None
@@ -204,28 +228,25 @@ async def test_initialize_does_not_fetch_power_status(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_power")
 async def test_initialize_clears_ipower_when_config_disabled() -> None:
     disabled_config = deepcopy(POWER_CONFIG)
     disabled_config["Enabled"] = 0
 
     svc = MockDiscoveryService()
-    original_create = svc._create_controller
-
-    def create_controller(
-        device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
-    ) -> MockController:
-        controller = original_create(device_uid, device_ip, is_v2, is_ipower)
-        controller.power_config = disabled_config
-        return controller
-
-    svc._create_controller = create_controller
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000003",
+        device_ip="10.0.0.1",
+        is_v2=False,
+        is_ipower=True,
+    )
+    controller.power_config = disabled_config
+    svc._controllers["000000003"] = controller
 
     try:
-        await _register_mock_service(
-            svc,
-            b"ASPort_12107,Mac_000000003,IP_10.0.0.1,iZone,iPower",
-        )
-        controller = cast(MockController, svc._controllers["000000003"])
+        await controller._initialize()
 
         assert controller.power is None
         assert controller.is_ipower is False
@@ -234,25 +255,22 @@ async def test_initialize_clears_ipower_when_config_disabled() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_power")
 async def test_power_init_probe_failure_leaves_controller_connected() -> None:
     svc = MockDiscoveryService()
-    original_create = svc._create_controller
-
-    def create_controller(
-        device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
-    ) -> MockController:
-        controller = original_create(device_uid, device_ip, is_v2, is_ipower)
-        controller.fail_power_types.add(1)
-        return controller
-
-    svc._create_controller = create_controller
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000003",
+        device_ip="10.0.0.1",
+        is_v2=False,
+        is_ipower=True,
+    )
+    controller.fail_power_types.add(1)
+    svc._controllers["000000003"] = controller
 
     try:
-        await _register_mock_service(
-            svc,
-            b"ASPort_12107,Mac_000000003,IP_10.0.0.1,iZone,iPower",
-        )
-        controller = cast(MockController, svc._controllers["000000003"])
+        await controller._initialize()
 
         assert controller.connected is True
         assert controller.bridge_connected is True

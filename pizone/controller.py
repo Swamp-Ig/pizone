@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 
 import aiohttp
 
+from . import power as power_mod
 from .exceptions import ControllerCommandError, ResponseDecodeError
 from .power import Power
 from .types import ControllerEndpoint
@@ -191,7 +192,7 @@ class Controller:
             device_uid=endpoint.uid,
             device_ip=endpoint.host,
             is_v2=False,
-            is_ipower=True,
+            is_ipower=power_mod.ENABLE_POWER,
         )
         controller._on_address_changed = on_address_changed
         await controller._initialize(system_settings=system_settings)
@@ -254,7 +255,15 @@ class Controller:
             self._is_v2 = False
 
     async def _probe_power(self) -> None:
-        """Probe power monitor endpoint when discovery hinted iPower; non-fatal."""
+        """Probe power monitor endpoint when discovery hinted iPower; non-fatal.
+
+        No-op unless :data:`pizone.power.ENABLE_POWER` is ``True``.
+        """
+        if not power_mod.ENABLE_POWER:
+            self._is_ipower = False
+            self._power = None
+            return
+
         if not self._is_ipower:
             self._power = None
             return
@@ -645,7 +654,13 @@ class Controller:
         return values
 
     async def _refresh_power(self, notify: bool = True) -> None:
-        """Refresh power monitor data when enabled."""
+        """Refresh power monitor data when enabled.
+
+        No-op unless :data:`pizone.power.ENABLE_POWER` is ``True`` and a power
+        object was probed successfully.
+        """
+        if not power_mod.ENABLE_POWER:
+            return
         if self._power is None or not self._power.enabled:
             return
         if not self.bridge_connected:

@@ -1,14 +1,14 @@
 """Shared test fixtures and network-free controller doubles."""
 
 from asyncio import Event, wait_for
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
 import json
 from typing import Any, cast
 
 import pytest
 
-from pizone import Controller, Listener
+from pizone import Controller, Listener, power as power_mod
 from pizone.discovery import DiscoveryService
 
 from .power_data import POWER_CONFIG, POWER_STATUS
@@ -138,6 +138,17 @@ async def _register_mock_service(svc: MockDiscoveryService, datagram: bytes) -> 
 
 
 @pytest.fixture
+def enable_power() -> Iterator[None]:
+    """Opt into iPower probe/refresh for the duration of a test."""
+    previous = power_mod.ENABLE_POWER
+    power_mod.ENABLE_POWER = True
+    try:
+        yield
+    finally:
+        power_mod.ENABLE_POWER = previous
+
+
+@pytest.fixture
 async def service() -> AsyncIterator[MockDiscoveryService]:
     """Async fixture providing a mock discovery service with a pre-discovered controller."""
     svc = MockDiscoveryService(legacy_pathway=True)
@@ -164,14 +175,22 @@ async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
 
 
 @pytest.fixture
-async def ipower_service() -> AsyncIterator[MockDiscoveryService]:
-    """Mock discovery service with an iPower-enabled controller."""
+async def ipower_service(
+    enable_power: None,
+) -> AsyncIterator[MockDiscoveryService]:
+    """Mock discovery service with an initialized iPower controller (no UDP bind)."""
+    del enable_power
     svc = MockDiscoveryService(legacy_pathway=True)
-
-    await _register_mock_service(
+    controller = MockController.from_discovery(
         svc,
-        b"ASPort_12107,Mac_000000003,IP_10.0.0.1,iZone,iPower",
+        svc._event_coordinator,
+        device_uid="000000003",
+        device_ip="10.0.0.1",
+        is_v2=False,
+        is_ipower=True,
     )
+    svc._controllers["000000003"] = controller
+    await controller._initialize()
 
     yield svc
 

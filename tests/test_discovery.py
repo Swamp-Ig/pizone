@@ -451,8 +451,9 @@ async def test_x_ac_flag_discovery() -> None:
     controller = cast(MockController, svc._controllers["000025841"])
     assert controller.device_ip == "10.0.0.90"
     assert controller.is_v2 is False
-    assert controller.power is not None
-    assert controller.power.enabled is True
+    # Power is gated off by default (ENABLE_POWER); iPower in the datagram is ignored.
+    assert controller.power is None
+    assert controller.is_ipower is False
 
     await svc.close()
 
