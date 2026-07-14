@@ -17,7 +17,8 @@ Layered connection state on :class:`~pizone.controller.Controller`:
 """
 
 from .controller import Controller
-from .discovery import DiscoveryService, Listener, discovery
+from .discovery import DiscoveryService, Listener, create_discovery, discovery
+from .types import ControllerEndpoint
 from .exceptions import ControllerCommandError, ResponseDecodeError
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
 from .zone import Zone
@@ -25,10 +26,12 @@ from .zone import Zone
 __all__ = [
     "Controller",
     "ControllerCommandError",
+    "ControllerEndpoint",
     "ResponseDecodeError",
     "Zone",
     "DiscoveryService",
     "Listener",
+    "create_discovery",
     "discovery",
     "Power",
     "PowerGroup",

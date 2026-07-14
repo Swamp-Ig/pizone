@@ -61,14 +61,18 @@ class FakeHttpSession:
         self._post_response = post_response if post_response is not None else response
         self._get_error = get_error
         self._post_error = post_error
+        self.get_calls = 0
+        self.post_calls = 0
 
     def get(self, *_args: object, **_kwargs: object) -> FakeHttpResponse:
+        self.get_calls += 1
         if self._get_error is not None:
             raise self._get_error
         assert self._get_response is not None
         return self._get_response
 
     def post(self, *_args: object, **_kwargs: object) -> FakeHttpResponse:
+        self.post_calls += 1
         if self._post_error is not None:
             raise self._post_error
         assert self._post_response is not None

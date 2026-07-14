@@ -7,11 +7,13 @@ import json
 import logging
 from asyncio import Condition, Lock
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Self, cast
 
 import aiohttp
 
 from .exceptions import ControllerCommandError, ResponseDecodeError
+from .types import ControllerEndpoint
 from .power import Power
 from .zone import Zone
 
@@ -135,20 +137,57 @@ class Controller:
         self._power: Power | None = None
 
         self._initialized: bool = False
+        self._closed: bool = False
         self._bridge_ok: bool = True
         self._izone_ok: bool = True
+        self._on_address_changed: Callable[[ControllerEndpoint], None] | None = None
 
         self._sending_lock = Lock()
         self._scan_condition = Condition()
 
-    async def _initialize(self) -> None:
+    # disposition: 1.4
+    @classmethod
+    async def create(
+        cls,
+        discovery_service: DiscoveryService,
+        event_coordinator: Listener,
+        *,
+        endpoint: ControllerEndpoint,
+        system_settings: Controller.ControllerData,
+        on_address_changed: Callable[[ControllerEndpoint], None] | None = None,
+    ) -> Self:
+        """Create and initialize a controller from an HTTP probe result.
+
+        1.4 path only; legacy code uses ``__init__`` plus ``_initialize()``.
+        """
+        controller = cls(
+            discovery_service,
+            event_coordinator,
+            device_uid=endpoint.uid,
+            device_ip=endpoint.host,
+            is_v2=False,
+            is_ipower=True,
+        )
+        controller._on_address_changed = on_address_changed
+        await controller._initialize(system_settings=system_settings)
+        return controller
+
+    async def _initialize(
+        self, system_settings: Controller.ControllerData | None = None
+    ) -> None:
         """Load system, zone, and optional power data from the device.
+
+        When *system_settings* is provided (1.4 create path), the initial
+        SystemSettings GET is skipped and the probe payload is applied instead.
 
         Raises:
             ConnectionError: If a required HTTP request fails.
             KeyError: If a required field is missing from a device response.
         """
-        settings = await self._refresh_system(notify=False)
+        if system_settings is not None:
+            settings = self._apply_system_settings(system_settings, notify=False)
+        else:
+            settings = await self._refresh_system(notify=False)
         if settings is None:
             raise ConnectionError("SystemSettings device ID mismatch")
 
@@ -225,7 +264,7 @@ class Controller:
             except asyncio.TimeoutError:
                 pass
 
-            if self._discovery_service.is_closed:
+            if self._closed or self._discovery_service.is_closed:
                 return
 
             # pylint: disable=broad-except
@@ -243,6 +282,15 @@ class Controller:
         Does not perform I/O directly and does not raise. Refresh failures
         are logged by the poll loop.
         """
+        async with self._scan_condition:
+            self._scan_condition.notify()
+
+    async def close(self) -> None:
+        """Close the controller and release its UID back to discovery."""
+        if self._closed:
+            return
+        self._closed = True
+        self._discovery_service._controller_closed(self)  # pylint: disable=protected-access
         async with self._scan_condition:
             self._scan_condition.notify()
 
@@ -534,6 +582,12 @@ class Controller:
             KeyError: If the response is missing required fields.
         """
         values: Controller.ControllerData = await self._get_resource("SystemSettings")
+        return self._apply_system_settings(values, notify=notify)
+
+    def _apply_system_settings(
+        self, values: ControllerData, *, notify: bool = True
+    ) -> ControllerData | None:
+        """Apply SystemSettings payload to the local cache."""
         if self._device_uid != values["AirStreamDeviceUId"]:
             _LOG.error("_refresh_system called with non-matching device ID")
             return None
@@ -613,7 +667,13 @@ class Controller:
 
     def _refresh_address(self, address: str) -> None:
         """Update the device IP and schedule a reconnect attempt if needed."""
-        self._ip = address
+        if address != self._ip:
+            self._ip = address
+            if self._on_address_changed is not None:
+                endpoint = ControllerEndpoint(uid=self._device_uid, host=address)
+                self._discovery_service.schedule_address_changed(
+                    self._on_address_changed, endpoint
+                )
         if not self._bridge_ok:
             self._discovery_service.create_task(self._retry_connection())
 

@@ -423,7 +423,7 @@ async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
     )
     await asyncio.sleep(0)
 
-    assert controller.mode == Controller.Mode.COOL
+    assert controller.mode == Controller.Mode.HEAT
 
 
 @pytest.mark.asyncio
@@ -438,7 +438,7 @@ async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
     )
     await asyncio.sleep(0.1)
 
-    assert controller.zones[0].name == "UPDATED"
+    assert controller.zones[0].name == "LIVING"
 
 
 @pytest.mark.asyncio

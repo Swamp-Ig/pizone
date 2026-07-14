@@ -97,24 +97,15 @@ class MockController(Controller):
 class MockDiscoveryService(DiscoveryService):
     """Discovery service double that does not send UDP broadcasts."""
 
-    def __init__(self) -> None:
+    _controller_cls = MockController
+
+    def __init__(self, *, legacy_pathway: bool = True) -> None:
         super().__init__()
         self.connected: bool = True
+        self._legacy_pathway = legacy_pathway
 
     def _send_broadcasts(self) -> None:
         """Avoid network traffic during tests."""
-
-    def _create_controller(
-        self, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
-    ) -> MockController:
-        return MockController(
-            self,
-            self._event_coordinator,
-            device_uid=device_uid,
-            device_ip=device_ip,
-            is_v2=is_v2,
-            is_ipower=is_ipower,
-        )
 
 
 async def _register_mock_service(
@@ -152,7 +143,7 @@ async def _register_mock_service(
 @pytest.fixture
 async def service() -> AsyncIterator[MockDiscoveryService]:
     """Async fixture providing a mock discovery service with a pre-discovered controller."""
-    svc = MockDiscoveryService()
+    svc = MockDiscoveryService(legacy_pathway=True)
 
     await _register_mock_service(
         svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
@@ -166,7 +157,7 @@ async def service() -> AsyncIterator[MockDiscoveryService]:
 @pytest.fixture
 async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
     """Async fixture providing a mock discovery service with legacy discovery message."""
-    svc = MockDiscoveryService()
+    svc = MockDiscoveryService(legacy_pathway=True)
 
     await _register_mock_service(svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
 
@@ -178,7 +169,7 @@ async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
 @pytest.fixture
 async def ipower_service() -> AsyncIterator[MockDiscoveryService]:
     """Mock discovery service with an iPower-enabled controller."""
-    svc = MockDiscoveryService()
+    svc = MockDiscoveryService(legacy_pathway=True)
 
     await _register_mock_service(
         svc,
