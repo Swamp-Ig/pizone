@@ -84,7 +84,10 @@ class Controller:
         "var-speed": [Fan.LOW, Fan.MED, Fan.HIGH, Fan.AUTO],
     }
 
+    # Device reports these on fault-shaped SystemSettings (bridge up, AC down).
+    # Live sample: tests.resources.FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC
     _FAULT_STATE_VALUES = frozenset({"error"})
+    # Safe property fallbacks when cache is empty or a field is in _FAULT_STATE_VALUES
     _SYSTEM_STATE_DEFAULTS: ControllerData = {
         "SysOn": "off",
         "SysMode": "cool",
