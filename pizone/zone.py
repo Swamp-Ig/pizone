@@ -218,4 +218,6 @@ class Zone:
 
         """
         send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}
-        await self._controller._send_command_async(command, send_data)  # noqa: SLF001
+        await self._controller._execute_zone_command(  # noqa: SLF001
+            command, send_data, self._index
+        )

@@ -41,7 +41,7 @@ CHANGED_SYSTEM = b"iZoneChanged_System"
 CHANGED_ZONES = b"iZoneChanged_Zones"
 CHANGED_SCHEDULES = b"iZoneChanged_Schedules"
 
-# disposition: deprecate — internal _scan_loop timing (removed in 1.4b)
+# disposition: deprecate — internal _scan_loop timing (removed in 1.4e)
 DISCOVERY_SLEEP = 5.0 * 60.0
 DISCOVERY_RESCAN = 20.0
 RESCAN_COOLDOWN = 5.0
@@ -317,7 +317,9 @@ class DiscoveryService:
         assert not self._transport, "Another connection made"
 
         self._transport = transport
-        self.create_task(self._scan_loop())
+        # disposition: deprecate — scan loop only on legacy pathway (removed in 1.4e)
+        if self._legacy_pathway:
+            self.create_task(self._scan_loop())
 
     def _get_broadcasts(self) -> Iterator[str]:
         for adapter in ifaddr.get_adapters():
@@ -371,6 +373,26 @@ class DiscoveryService:
         if self._transport is None:
             raise ConnectionError("Discovery transport is not ready")
         self._send_broadcasts()
+
+    # disposition: 1.4
+    def schedule_cooled_scan(self) -> None:
+        """Fire a non-blocking ``scan()`` if outside the rescan cooldown."""
+        if self.is_closed:
+            return
+        now = asyncio.get_running_loop().time()
+        if now - self._last_rescan_time < RESCAN_COOLDOWN:
+            return
+        self._last_rescan_time = now
+
+        async def _run() -> None:
+            if self.is_closed:
+                return
+            try:
+                await self.scan()
+            except Exception:  # noqa: BLE001
+                _LOG.debug("Cooled scan nudge failed", exc_info=True)
+
+        asyncio.get_running_loop().create_task(_run())
 
     # disposition: 1.4
     def _ensure_endpoint_available(self, endpoint: ControllerEndpoint) -> None:

@@ -1,7 +1,9 @@
 """Tests for controller property reads and command paths."""
 
+import asyncio
 from copy import deepcopy
 from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -300,14 +302,16 @@ async def test_power_refresh_skipped_when_bridge_disconnected(
 
 
 @pytest.mark.asyncio
-async def test_power_poll_failure_does_not_mark_controller_disconnected(
+async def test_power_poll_failure_raises_without_disconnecting_controller(
     ipower_service: MockDiscoveryService,
 ) -> None:
+    """Power refresh raises; power.connected flips but controller stays up."""
     controller = cast(MockController, ipower_service._controllers["000000003"])
     assert controller.power is not None
     controller.fail_power_types.add(2)
 
-    await controller._refresh_power(notify=False)
+    with pytest.raises(ConnectionError):
+        await controller._refresh_power(notify=False)
 
     assert controller.connected is True
     assert controller.power.connected is False
@@ -510,3 +514,174 @@ async def test_both_false_on_transport_failure(service: MockDiscoveryService) ->
 
     assert controller.bridge_connected is False
     assert controller.connected is False
+
+
+@pytest.mark.asyncio
+async def test_create_controller_starts_no_long_running_tasks() -> None:
+    """1.4 create_controller must not start poll/scan/retry loops."""
+    service = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController(
+        service,
+        service._event_coordinator,
+        device_uid="000000001",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = deepcopy(controller.resources["SystemSettings"])
+    service._controllers["000000001"] = controller
+
+    await controller._initialize(system_settings=settings)
+
+    living = [task for task in service._tasks if not task.done()]
+    assert living == []
+    with pytest.raises(RuntimeError, match="legacy-only"):
+        await controller.refresh()
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_initialize_starts_poll_loop(
+    service: MockDiscoveryService,
+) -> None:
+    """Legacy pathway keeps the deprecated poll loop running."""
+    living = [task for task in service._tasks if not task.done()]
+    assert len(living) >= 2
+
+
+@pytest.mark.asyncio
+async def test_new_path_start_discovery_does_not_start_scan_loop() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    await service.start_discovery()
+    living = [task for task in service._tasks if not task.done()]
+    assert living == []
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_refresh_all_public_updates_cache(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    controller.resources["SystemSettings"]["SysMode"] = "cool"
+
+    await controller.refresh_all()
+
+    assert controller.mode == Controller.Mode.COOL
+
+
+@pytest.mark.asyncio
+async def test_refresh_transport_failure_nudges_scan() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController(
+        service,
+        service._event_coordinator,
+        device_uid="000000001",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = deepcopy(controller.resources["SystemSettings"])
+    service._controllers["000000001"] = controller
+    await controller._initialize(system_settings=settings)
+
+    controller._connected = False
+    scan = AsyncMock()
+    service.scan = scan  # type: ignore[method-assign]
+
+    with pytest.raises(ConnectionError):
+        await controller.refresh_all()
+
+    await asyncio.sleep(0)
+    scan.assert_awaited_once()
+    assert controller.bridge_connected is False
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_scan_respects_cooldown() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController(
+        service,
+        service._event_coordinator,
+        device_uid="000000001",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = deepcopy(controller.resources["SystemSettings"])
+    service._controllers["000000001"] = controller
+    await controller._initialize(system_settings=settings)
+
+    controller._connected = False
+    scan = AsyncMock()
+    service.scan = scan  # type: ignore[method-assign]
+
+    with pytest.raises(ConnectionError):
+        await controller.refresh_system()
+    await asyncio.sleep(0)
+    with pytest.raises(ConnectionError):
+        await controller.refresh_system()
+    await asyncio.sleep(0)
+
+    scan.assert_awaited_once()
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_set_system_command_confirms_with_refresh_system() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController(
+        service,
+        service._event_coordinator,
+        device_uid="000000001",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = deepcopy(controller.resources["SystemSettings"])
+    service._controllers["000000001"] = controller
+    await controller._initialize(system_settings=settings)
+
+    fetch = AsyncMock(wraps=controller._fetch_system)
+    controller._fetch_system = fetch  # type: ignore[method-assign]
+
+    await controller.set_on(False)
+
+    fetch.assert_awaited()
+    assert any(command == "SystemON" for command, _ in controller.sent)
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_zone_command_confirms_with_zone_group_refresh() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController(
+        service,
+        service._event_coordinator,
+        device_uid="000000001",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = deepcopy(controller.resources["SystemSettings"])
+    service._controllers["000000001"] = controller
+    await controller._initialize(system_settings=settings)
+
+    fetch = AsyncMock(wraps=controller._fetch_zone_group)
+    controller._fetch_zone_group = fetch  # type: ignore[method-assign]
+
+    await controller.zones[1].set_temp_setpoint(22.0)
+
+    fetch.assert_awaited()
+    assert fetch.await_args.args[0] == 0
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_set_still_wakes_poll(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controllers["000000001"])
+    refresh = AsyncMock(wraps=controller.refresh)
+    controller.refresh = refresh  # type: ignore[method-assign]
+
+    await controller.set_on(False)
+
+    refresh.assert_awaited()
