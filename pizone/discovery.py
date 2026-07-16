@@ -7,6 +7,7 @@ from asyncio import (
     Condition,
     DatagramProtocol,
     DatagramTransport,
+    Lock,
     Task,
 )
 from collections.abc import Callable, Coroutine, Iterator
@@ -36,7 +37,7 @@ DISCOVERY_MSG = b"IASD"  # cspell:disable-line
 DISCOVERY_PORT = 12107
 UPDATE_PORT = 7005
 
-# CHANGED_* datagram types (handled as no-ops; stays through dual-track)
+# CHANGED_* — documented UDP protocol; recognize and ignore (no refresh). Dual-track.
 CHANGED_SYSTEM = b"iZoneChanged_System"
 CHANGED_ZONES = b"iZoneChanged_Zones"
 CHANGED_SCHEDULES = b"iZoneChanged_Schedules"
@@ -157,6 +158,9 @@ class DiscoveryService:
         self._known_endpoints: dict[str, ControllerEndpoint] = {}
         self._claimed_endpoints: dict[str, ControllerEndpoint] = {}
         self._scan_collector: dict[str, str] | None = None
+        self._discover_lock = Lock()
+        # Set during discover_all wait so passive notifies dedupe with verify fan-out.
+        self._discover_all_notified: set[str] | None = None
 
         _LOG.info("Starting discovery protocol")
         self._session = session
@@ -414,6 +418,15 @@ class DiscoveryService:
         self._known_endpoints[endpoint.uid] = endpoint
 
     # disposition: 1.4
+    def _emit_endpoint_discovered(self, endpoint: ControllerEndpoint) -> None:
+        """Invoke on_endpoint_discovered and record uid for discover_all dedupe."""
+        if self._on_endpoint_discovered:
+            with LogExceptions("on_endpoint_discovered"):
+                self._on_endpoint_discovered(endpoint)
+        if self._discover_all_notified is not None:
+            self._discover_all_notified.add(endpoint.uid)
+
+    # disposition: 1.4
     def _endpoint_by_host(
         self, endpoints: dict[str, ControllerEndpoint], host: str
     ) -> ControllerEndpoint | None:
@@ -454,56 +467,75 @@ class DiscoveryService:
         if endpoint is not None:
             return endpoint
 
-        collector: dict[str, str] = {}
-        self._scan_collector = collector
-        try:
-            await self.scan()
-            await asyncio.sleep(SCAN_TIMEOUT)
-        finally:
-            self._scan_collector = None
+        async with self._discover_lock:
+            endpoint = self._known_endpoints.get(uid)
+            if endpoint is not None:
+                return endpoint
 
-        host = collector.get(uid)
-        if host is None:
-            return None
+            collector: dict[str, str] = {}
+            self._scan_collector = collector
+            try:
+                await self.scan()
+                await asyncio.sleep(SCAN_TIMEOUT)
+            finally:
+                self._scan_collector = None
 
-        probed = await self._probe(host)
-        if probed is None:
-            return None
-        endpoint, _settings = probed
-        if endpoint.uid != uid:
-            return None
-        self._cache_endpoint(endpoint)
-        return endpoint
+            host = collector.get(uid)
+            if host is None:
+                return None
+
+            probed = await self._probe(host)
+            if probed is None:
+                return None
+            endpoint, _settings = probed
+            if endpoint.uid != uid:
+                return None
+            self._cache_endpoint(endpoint)
+            return endpoint
 
     # disposition: 1.4
     async def discover_all(self) -> list[ControllerEndpoint]:
-        """Broadcast IASD, collect replies, and HTTP-verify each endpoint."""
-        collector: dict[str, str] = {
-            uid: endpoint.host for uid, endpoint in self._known_endpoints.items()
-        }
-        self._scan_collector = collector
-        try:
-            await self.scan()
-            await asyncio.sleep(SCAN_TIMEOUT)
-        finally:
-            self._scan_collector = None
+        """Broadcast IASD, collect replies, and HTTP-verify each endpoint.
 
-        verified: list[ControllerEndpoint] = []
-        seen_hosts: set[str] = set()
-        for host in collector.values():
-            if host in seen_hosts:
-                continue
-            seen_hosts.add(host)
-            probed = await self._probe(host)
-            if probed is None:
-                continue
-            endpoint, _settings = probed
+        Invokes ``on_endpoint_discovered`` once per verified uid for this call.
+        ASPort during the wait uses the normal discovery notify path (new /
+        host-change only); after verify, any uid not already notified in this
+        call is notified once so a user-initiated scan still fan-outs when
+        nothing new arrived over UDP (e.g. already-known same-host).
+        """
+        async with self._discover_lock:
+            notified: set[str] = set()
+            self._discover_all_notified = notified
+            collector: dict[str, str] = {
+                uid: endpoint.host for uid, endpoint in self._known_endpoints.items()
+            }
+            self._scan_collector = collector
             try:
-                self._cache_endpoint(endpoint)
-            except RuntimeError:
-                continue
-            verified.append(endpoint)
-        return verified
+                await self.scan()
+                await asyncio.sleep(SCAN_TIMEOUT)
+            finally:
+                self._scan_collector = None
+                self._discover_all_notified = None
+
+            verified: list[ControllerEndpoint] = []
+            seen_hosts: set[str] = set()
+            for host in collector.values():
+                if host in seen_hosts:
+                    continue
+                seen_hosts.add(host)
+                probed = await self._probe(host)
+                if probed is None:
+                    continue
+                endpoint, _settings = probed
+                try:
+                    self._cache_endpoint(endpoint)
+                except RuntimeError:
+                    continue
+                verified.append(endpoint)
+                if endpoint.uid not in notified:
+                    self._emit_endpoint_discovered(endpoint)
+                    notified.add(endpoint.uid)
+            return verified
 
     # disposition: 1.4
     async def create_controller(
@@ -587,6 +619,7 @@ class DiscoveryService:
             system_settings=cast(Controller.ControllerData, system_settings),
             on_address_changed=on_address_changed,
         )
+        self._controllers[uid] = controller
         self._claim_endpoint(endpoint)
         return controller
 
@@ -601,6 +634,7 @@ class DiscoveryService:
     # disposition: 1.4
     def _controller_closed(self, controller: Controller) -> None:
         """Release a closed controller back to the unclaimed endpoint cache."""
+        self._controllers.pop(controller.device_uid, None)
         self._release_endpoint(
             ControllerEndpoint(uid=controller.device_uid, host=controller.device_ip)
         )
@@ -833,22 +867,31 @@ class DiscoveryService:
 
     # disposition: 1.4
     def _discovery_received(self, data: bytes) -> None:
-        # Passive UDP: cache and notify without HTTP verify; still feeds scan collector.
+        """Handle passive ASPort: cache/notify unclaimed; address-change claimed."""
         endpoint = self._parse_datagram(data)
         if endpoint is None:
             _LOG.warning("Invalid Message Received: %s", data.decode(errors="replace"))
             return
 
-        if endpoint.uid not in self._claimed_endpoints:
-            with suppress(RuntimeError):
-                self._cache_endpoint(endpoint)
-
-            if self._on_endpoint_discovered:
-                with LogExceptions("on_endpoint_discovered"):
-                    self._on_endpoint_discovered(endpoint)
-
         if self._scan_collector is not None:
             self._scan_collector[endpoint.uid] = endpoint.host
+
+        claimed = self._claimed_endpoints.get(endpoint.uid)
+        if claimed is not None:
+            if claimed.host != endpoint.host:
+                self._claimed_endpoints[endpoint.uid] = endpoint
+                controller = self._controllers.get(endpoint.uid)
+                if controller is not None:
+                    controller._refresh_address(endpoint.host)  # noqa: SLF001
+            return
+
+        previous = self._known_endpoints.get(endpoint.uid)
+        newly_seen = previous is None
+        host_changed = previous is not None and previous.host != endpoint.host
+        with suppress(RuntimeError):
+            self._cache_endpoint(endpoint)
+        if newly_seen or host_changed:
+            self._emit_endpoint_discovered(endpoint)
 
     def _create_controller(
         self, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool

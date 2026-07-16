@@ -411,6 +411,7 @@ async def test_failed_init_deduplicated() -> None:
 
 @pytest.mark.asyncio
 async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
+    """Legacy pathway: iZoneChanged_System is recognized and ignored (no refresh)."""
     controller = cast(MockController, service._controllers["000000001"])
     controller.resources["SystemSettings"]["SysMode"] = "cool"
     controller._system_settings["SysMode"] = "heat"
@@ -426,6 +427,7 @@ async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
+    """Legacy pathway: iZoneChanged_Zones is recognized and ignored (no refresh)."""
     controller = cast(MockController, service._controllers["000000001"])
     controller.resources["Zones1_4"][0]["Name"] = "UPDATED"
     controller.zones[0]._zone_data["Name"] = "LIVING"

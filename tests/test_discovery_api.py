@@ -185,6 +185,216 @@ async def test_discover_all_invokes_callback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_discover_all_notifies_known_without_new_datagram() -> None:
+    """User scan notifies once for already-known same-host (no wait-window ASPort)."""
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    service._known_endpoints["000025841"] = ControllerEndpoint(
+        uid="000025841", host="10.0.0.90"
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", AsyncMock()),
+    ):
+        endpoints = await service.discover_all()
+
+    assert endpoints == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
+    assert discovered == endpoints
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_all_dedupes_udp_and_verify_notify() -> None:
+    """ASPort during wait + verify must not double-fire on_endpoint_discovered."""
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    async def scan_and_reply() -> None:
+        service._process_datagram(
+            b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone",
+            ("10.0.0.90", 12107),
+        )
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", side_effect=scan_and_reply),
+    ):
+        await service.discover_all()
+
+    assert discovered == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_passive_asport_notifies_new_only() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+    datagram = b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone"
+
+    service._process_datagram(datagram, ("10.0.0.90", 12107))
+    service._process_datagram(datagram, ("10.0.0.90", 12107))
+
+    assert discovered == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_passive_asport_notifies_on_host_change() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    service._process_datagram(
+        b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone",
+        ("10.0.0.90", 12107),
+    )
+    service._process_datagram(
+        b"ASPort_12107,Mac_000025841,IP_10.0.0.91,iZone",
+        ("10.0.0.91", 12107),
+    )
+
+    assert discovered == [
+        ControllerEndpoint(uid="000025841", host="10.0.0.90"),
+        ControllerEndpoint(uid="000025841", host="10.0.0.91"),
+    ]
+    assert service._known_endpoints["000025841"].host == "10.0.0.91"
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    seen: list[ControllerEndpoint] = []
+    controller = await service.create_controller(
+        "000025841",
+        "10.0.0.90",
+        on_address_changed=seen.append,
+    )
+
+    service._process_datagram(
+        b"ASPort_12107,Mac_000025841,IP_10.0.0.91,iZone",
+        ("10.0.0.91", 12107),
+    )
+    await asyncio.sleep(0)
+
+    assert controller.device_ip == "10.0.0.91"
+    assert seen == [ControllerEndpoint(uid="000025841", host="10.0.0.91")]
+    assert service._claimed_endpoints["000025841"].host == "10.0.0.91"
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_claimed_asport_same_host_silent() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    seen: list[ControllerEndpoint] = []
+    controller = await service.create_controller(
+        "000025841",
+        "10.0.0.90",
+        on_address_changed=seen.append,
+    )
+
+    service._process_datagram(
+        b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone",
+        ("10.0.0.90", 12107),
+    )
+    await asyncio.sleep(0)
+
+    assert controller.device_ip == "10.0.0.90"
+    assert seen == []
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_close_does_not_fire_on_endpoint_discovered() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+    controller = await service.create_controller("000025841", "10.0.0.90")
+    await controller.close()
+
+    assert discovered == []
+    assert "000025841" in service._known_endpoints
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_changed_datagrams_ignored_on_14_path() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    service._process_datagram(b"iZoneChanged_System", ("10.0.0.90", 12107))
+    service._process_datagram(b"iZoneChanged_Zones", ("10.0.0.90", 12107))
+    service._process_datagram(b"iZoneChanged_Schedules", ("10.0.0.90", 12107))
+
+    assert discovered == []
+    assert service._known_endpoints == {}
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_calls_are_serialized() -> None:
+    """Concurrent discover_all calls must not overlap shared scratch state."""
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    active = 0
+    overlapped = False
+
+    async def scan_and_reply() -> None:
+        nonlocal active, overlapped
+        active += 1
+        if active > 1:
+            overlapped = True
+        service._process_datagram(
+            b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone",
+            ("10.0.0.90", 12107),
+        )
+        await asyncio.sleep(0)
+        active -= 1
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock(side_effect=asyncio.sleep)),
+        patch.object(service, "scan", side_effect=scan_and_reply),
+    ):
+        first, second = await asyncio.gather(
+            service.discover_all(), service.discover_all()
+        )
+
+    expected = [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
+    assert first == expected
+    assert second == expected
+    assert overlapped is False
+    await service.close()
+
+
+@pytest.mark.asyncio
 async def test_discover_all_excludes_created_controllers() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
     service._session = cast(
