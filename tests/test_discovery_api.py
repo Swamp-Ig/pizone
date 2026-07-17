@@ -15,9 +15,11 @@ from aiohttp import ClientSession
 import pytest
 
 from pizone import (
+    PLACEHOLDER_DEVICE_UID,
     Controller,
     ControllerCommandError,
     ControllerEndpoint,
+    UnpairedBridgeError,
     create_discovery,
 )
 from pizone.discovery import DiscoveryService
@@ -572,4 +574,105 @@ async def test_create_controller_no_retry_on_command_error() -> None:
     ):
         await service.create_controller("000025841", "10.0.0.90")
     discover_by_uid.assert_not_awaited()
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_udp_ignores_placeholder_uid() -> None:
+    """Passive ASPort for the unpaired placeholder must not cache or notify."""
+    discovered: list[ControllerEndpoint] = []
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._on_endpoint_discovered = discovered.append
+    service._process_datagram(
+        b"ASPort_12107,Mac_000000000,IP_10.0.0.111,iZone",
+        ("10.0.0.111", 12107),
+    )
+    assert discovered == []
+    assert service._known_endpoints == {}
+    await service.close()
+
+
+# disposition: deprecate
+@pytest.mark.asyncio
+async def test_legacy_udp_ignores_placeholder_uid() -> None:
+    """Legacy pathway must not initialize a controller for the placeholder UID."""
+    service = MockDiscoveryService(legacy_pathway=True)
+    service._process_datagram(
+        b"ASPort_12107,Mac_000000000,IP_10.0.0.111,iZone",
+        ("10.0.0.111", 12107),
+    )
+    await asyncio.sleep(0)
+    assert service._controllers == {}
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_discover_by_uid_placeholder_raises_without_io() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    scan = AsyncMock()
+    with (
+        patch.object(service, "scan", scan),
+        pytest.raises(UnpairedBridgeError, match="unpaired"),
+    ):
+        await service.discover_by_uid(PLACEHOLDER_DEVICE_UID)
+    scan.assert_not_awaited()
+    assert service._known_endpoints == {}
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_create_controller_placeholder_raises_without_io() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    probe = AsyncMock()
+    with (
+        patch.object(service, "_probe", probe),
+        pytest.raises(UnpairedBridgeError, match="unpaired"),
+    ):
+        await service.create_controller(PLACEHOLDER_DEVICE_UID, "10.0.0.111")
+    probe.assert_not_awaited()
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_discover_by_host_placeholder_raises_without_cache() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response(PLACEHOLDER_DEVICE_UID)),
+    )
+    with pytest.raises(UnpairedBridgeError, match="unpaired"):
+        await service.discover_by_host("10.0.0.111")
+    assert service._known_endpoints == {}
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_discover_all_omits_placeholder_uid() -> None:
+    discovered: list[ControllerEndpoint] = []
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._on_endpoint_discovered = discovered.append
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response(PLACEHOLDER_DEVICE_UID)),
+    )
+
+    async def scan_and_reply() -> None:
+        # Inject into collector as if UDP had been accepted before filtering;
+        # discover_all must still omit after probe.
+        assert service._scan_collector is not None
+        service._scan_collector[PLACEHOLDER_DEVICE_UID] = "10.0.0.111"
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", AsyncMock(side_effect=scan_and_reply)),
+    ):
+        endpoints = await service.discover_all()
+    assert endpoints == []
+    assert discovered == []
+    assert service._known_endpoints == {}
     await service.close()

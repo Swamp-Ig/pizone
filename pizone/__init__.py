@@ -29,9 +29,14 @@ from types import ModuleType
 from typing import Any
 
 from . import power as power_mod
+from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
 from .discovery import DiscoveryService, Listener, create_discovery, discovery
-from .exceptions import ControllerCommandError, ResponseDecodeError
+from .exceptions import (
+    ControllerCommandError,
+    ResponseDecodeError,
+    UnpairedBridgeError,
+)
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
 from .types import ControllerEndpoint
 from .zone import Zone
@@ -59,6 +64,7 @@ sys.modules[__name__].__class__ = _PizoneModule
 
 __all__ = [
     "ENABLE_POWER",
+    "PLACEHOLDER_DEVICE_UID",
     "BatteryLevel",
     "Controller",
     "ControllerCommandError",
@@ -70,6 +76,7 @@ __all__ = [
     "PowerDevice",
     "PowerGroup",
     "ResponseDecodeError",
+    "UnpairedBridgeError",
     "Zone",
     "create_discovery",
     "discovery",

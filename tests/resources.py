@@ -423,3 +423,36 @@ FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC = {
     "FreeAir": "disabled",
     "FanAuto": "disabled",
 }
+
+# Live capture 2026-07-17: paired ASH 000025841 @ 10.0.0.90 after cold restart
+# with AC off (cold-restart.log ~12:43:21). Same fault shape as BRIDGE_NO_AC but
+# real UID. UDP AC slot was ``X`` at that moment (fixture is HTTP only).
+FAULT_SYSTEM_SETTINGS_PAIRED_COLD_RESTART = {
+    "AirStreamDeviceUId": "000025841",
+    "DeviceType": "ASH",
+    "SysOn": "off",
+    "SysMode": "error",
+    "SysFan": "error",
+    "SleepTimer": 0,
+    "UnitType": "No Unit Type Configured!",
+    "Supply": "0.0",
+    "Setpoint": "0.0",
+    "Temp": "0.0",
+    "RAS": "error",
+    "CtrlZone": 0,
+    "Tag1": "",
+    "Tag2": "",
+    "Warnings": "none",
+    "ACError": "",
+    "Id": 0,
+    "EcoLock": "false",
+    "EcoMax": "0.0",
+    "EcoMin": "0.0",
+    "NoOfConst": 0,
+    "NoOfZones": 0,
+    "SysType": "210",
+    "AirflowLock": "off",
+    "UnitLocked": "false",
+    "FreeAir": "disabled",
+    "FanAuto": "disabled",
+}

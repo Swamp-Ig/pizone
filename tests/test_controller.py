@@ -17,7 +17,11 @@ from pizone import Controller, Listener
 
 from .conftest import MockController, MockDiscoveryService, _register_mock_service
 from .power_data import POWER_CONFIG
-from .resources import SYSTEMS
+from .resources import (
+    FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC,
+    FAULT_SYSTEM_SETTINGS_PAIRED_COLD_RESTART,
+    SYSTEMS,
+)
 
 
 class _DisconnectListener(Listener):
@@ -377,6 +381,35 @@ async def test_bridge_ok_true_when_izone_fault(service: MockDiscoveryService) ->
     assert controller.bridge_connected is True
     assert controller.connected is False
     assert controller.fan == healthy_fan
+
+
+# disposition: deprecate
+@pytest.mark.parametrize(
+    "fault_settings",
+    [
+        pytest.param(
+            FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC,
+            id="unpaired_bridge_no_ac",
+        ),
+        pytest.param(
+            FAULT_SYSTEM_SETTINGS_PAIRED_COLD_RESTART,
+            id="paired_cold_restart",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_live_fault_fixtures_mark_izone_not_ok(
+    service: MockDiscoveryService,
+    fault_settings: dict[str, object],
+) -> None:
+    """Preserve live unpaired and paired cold-restart fault specimens."""
+    controller = cast(MockController, service._controllers["000000001"])
+    settings = deepcopy(fault_settings)
+    settings["AirStreamDeviceUId"] = controller.device_uid
+    controller.resources["SystemSettings"] = settings
+    await controller._refresh_system(notify=False)
+    assert controller.bridge_connected is True
+    assert controller.connected is False
 
 # disposition: deprecate
 @pytest.mark.asyncio

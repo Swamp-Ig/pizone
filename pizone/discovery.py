@@ -22,7 +22,9 @@ import aiohttp
 from aiohttp import ClientSession
 import ifaddr
 
+from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
+from .exceptions import raise_if_placeholder_uid
 from .types import ControllerEndpoint
 from .zone import Zone
 
@@ -440,6 +442,10 @@ class DiscoveryService:
         """Return a known endpoint for *host*, or HTTP-probe if unseen.
 
         User-initiated lookup; HTTP verify on probe. Cache hits may be older UDP data.
+
+        Raises:
+            UnpairedBridgeError: If the probed UID is the unpaired placeholder;
+                the endpoint is not cached.
         """
         claimed = self._endpoint_by_host(self._claimed_endpoints, host)
         if claimed is not None:
@@ -452,6 +458,7 @@ class DiscoveryService:
         if probed is None:
             return None
         endpoint, _settings = probed
+        raise_if_placeholder_uid(endpoint.uid)
         self._cache_endpoint(endpoint)
         return endpoint
 
@@ -460,7 +467,11 @@ class DiscoveryService:
         """Broadcast IASD, wait for *uid*, and HTTP-verify the response.
 
         User-initiated lookup. Cache hits skip re-probe.
+
+        Raises:
+            UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
         """
+        raise_if_placeholder_uid(uid)
         if uid in self._claimed_endpoints:
             raise RuntimeError(f"Controller {uid} already created")
         endpoint = self._known_endpoints.get(uid)
@@ -527,6 +538,8 @@ class DiscoveryService:
                 if probed is None:
                     continue
                 endpoint, _settings = probed
+                if endpoint.uid == PLACEHOLDER_DEVICE_UID:
+                    continue
                 try:
                     self._cache_endpoint(endpoint)
                 except RuntimeError:
@@ -552,6 +565,7 @@ class DiscoveryService:
         being unreachable even after a recent discovery notify.
 
         Raises:
+            UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
             RuntimeError: If a controller with *uid* already exists.
             ConnectionError: If the controller cannot be reached after
                 address fallback.
@@ -560,6 +574,7 @@ class DiscoveryService:
             KeyError: If a required field is missing from a device response.
 
         """
+        raise_if_placeholder_uid(uid)
         if uid in self._claimed_endpoints:
             raise RuntimeError(f"Controller {uid} already created")
         pending_address_changed: ControllerEndpoint | None = None
@@ -819,6 +834,9 @@ class DiscoveryService:
 
         message, device_uid, device_ip = parsed
 
+        if device_uid == PLACEHOLDER_DEVICE_UID:
+            return
+
         if device_uid not in self._controllers:
             if device_uid in self._pending_init:
                 return
@@ -871,6 +889,9 @@ class DiscoveryService:
         endpoint = self._parse_datagram(data)
         if endpoint is None:
             _LOG.warning("Invalid Message Received: %s", data.decode(errors="replace"))
+            return
+
+        if endpoint.uid == PLACEHOLDER_DEVICE_UID:
             return
 
         if self._scan_collector is not None:

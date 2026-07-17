@@ -100,7 +100,8 @@ class Controller:
     }
 
     # Device reports these on fault-shaped SystemSettings (bridge up, AC down).
-    # Live sample: tests.resources.FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC
+    # Live samples: tests.resources.FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC (unpaired)
+    # and FAULT_SYSTEM_SETTINGS_PAIRED_COLD_RESTART (paired UID, cold restart).
     _FAULT_STATE_VALUES = frozenset({"error"})
     # Safe property fallbacks when cache is empty or a field is in _FAULT_STATE_VALUES
     _SYSTEM_STATE_DEFAULTS: ControllerData = {
