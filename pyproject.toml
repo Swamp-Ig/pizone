@@ -72,6 +72,11 @@ check_untyped_defs = true
 no_implicit_optional = true
 strict_equality = true
 
+# VS Code / Cursor passes open files explicitly; mypy then ignores `files`/`exclude`.
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
 # Ruff config broadly aligned with Home Assistant core (select/ignore + format).
 # HA-only plugins/import aliases are omitted; known-first-party is pizone.
 [tool.ruff]
