@@ -73,6 +73,7 @@ def dump_data(ctrl: Controller) -> None:
             f"airflow_min:{zone.airflow_min} airflow_max:{zone.airflow_max}"
         )
 
+
 # disposition: deprecate
 @pytest.mark.hardware
 async def test_full_stack() -> None:
@@ -144,6 +145,7 @@ async def test_full_stack() -> None:
 
         dump_data(ctrl)
 
+
 # disposition: deprecate
 @pytest.mark.hardware
 async def test_reconnect() -> None:
@@ -166,6 +168,7 @@ async def test_reconnect() -> None:
         assert listener.connect_count == 2
 
         await ctrl.set_sleep_timer(0)
+
 
 # disposition: deprecate
 @pytest.mark.hardware

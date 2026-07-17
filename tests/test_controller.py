@@ -47,6 +47,7 @@ def _fault_system_settings(device_uid: str) -> dict[str, object]:
     settings["UnitType"] = "No Unit Type Configured!"
     return settings
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_controller_property_reads(service: MockDiscoveryService) -> None:
@@ -75,6 +76,7 @@ async def test_controller_property_reads(service: MockDiscoveryService) -> None:
     assert controller.zones_const == 1
     assert controller.sys_type == "320"
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_on(service: MockDiscoveryService) -> None:
@@ -87,6 +89,7 @@ async def test_set_on(service: MockDiscoveryService) -> None:
     await controller.set_on(True)
     assert controller.is_on is True
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_fan(service: MockDiscoveryService) -> None:
@@ -96,6 +99,7 @@ async def test_set_fan(service: MockDiscoveryService) -> None:
     await controller.set_fan(fan)
     assert controller.fan == fan
     assert controller.sent[-1] == ("SystemFAN", {"SystemFAN": "low"})
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -108,6 +112,7 @@ async def test_set_sleep_timer(service: MockDiscoveryService) -> None:
     await controller.set_sleep_timer(0)
     assert controller.sleep_timer == 0
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
@@ -115,6 +120,7 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
 
     await controller.set_temp_setpoint(22.5)
     assert controller.temp_setpoint == pytest.approx(22.5)
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -124,6 +130,7 @@ async def test_set_fan_validation(service: MockDiscoveryService) -> None:
     with pytest.raises(AttributeError, match="Fan mode top not allowed"):
         await controller.set_fan(Controller.Fan.TOP)
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None:
@@ -131,6 +138,7 @@ async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None
 
     with pytest.raises(AttributeError, match="Invalid Sleep Timer"):
         await controller.set_sleep_timer(45)
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -141,6 +149,7 @@ async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> No
         await controller.set_temp_setpoint(23.3)
     with pytest.raises(AttributeError, match="out of range"):
         await controller.set_temp_setpoint(35.0)
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -326,6 +335,7 @@ async def test_power_poll_failure_raises_without_disconnecting_controller(
     assert controller.connected is True
     assert controller.power.connected is False
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_v2_probe_sets_is_v2_when_systemv2_returned() -> None:
@@ -354,6 +364,7 @@ async def test_v2_probe_sets_is_v2_when_systemv2_returned() -> None:
     finally:
         await svc.close()
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_v2_probe_clears_is_v2_on_http_error() -> None:
@@ -368,6 +379,7 @@ async def test_v2_probe_clears_is_v2_on_http_error() -> None:
         assert controller.is_v2 is False
     finally:
         await svc.close()
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -411,6 +423,7 @@ async def test_live_fault_fixtures_mark_izone_not_ok(
     assert controller.bridge_connected is True
     assert controller.connected is False
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_cache_preserved_on_izone_fault(service: MockDiscoveryService) -> None:
@@ -421,6 +434,7 @@ async def test_cache_preserved_on_izone_fault(service: MockDiscoveryService) -> 
     await controller._refresh_system(notify=False)
 
     assert controller._system_settings == healthy_settings
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -441,6 +455,7 @@ async def test_connected_restored_on_izone_recovery(
     assert controller.connected is True
     assert listener.reconnected == 1
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_no_listener_flutter_repeated_fault_polls(
@@ -457,6 +472,7 @@ async def test_no_listener_flutter_repeated_fault_polls(
     assert listener.disconnected == 1
     assert listener.reconnected == 0
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_izone_fault_disconnect_uses_connection_error(
@@ -470,6 +486,7 @@ async def test_izone_fault_disconnect_uses_connection_error(
     await controller._refresh_system(notify=True)
 
     assert isinstance(listener.last_exception, ConnectionError)
+
 
 # disposition: deprecate
 @pytest.mark.asyncio
@@ -528,6 +545,7 @@ async def test_init_fault_property_reads_no_crash() -> None:
     assert controller.is_on is False
     assert controller.zones_total == 0
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_fault_placeholder_values_in_cache_use_defaults(
@@ -542,6 +560,7 @@ async def test_fault_placeholder_values_in_cache_use_defaults(
     assert controller.ras_mode == "zones"
     assert controller.mode == Controller.Mode.COOL
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_both_false_on_transport_failure(service: MockDiscoveryService) -> None:
@@ -553,6 +572,7 @@ async def test_both_false_on_transport_failure(service: MockDiscoveryService) ->
 
     assert controller.bridge_connected is False
     assert controller.connected is False
+
 
 # disposition: 1.4
 @pytest.mark.asyncio
@@ -577,6 +597,7 @@ async def test_create_controller_starts_no_long_running_tasks() -> None:
         await controller.refresh()
     await service.close()
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_legacy_initialize_starts_poll_loop(
@@ -584,6 +605,7 @@ async def test_legacy_initialize_starts_poll_loop(
 ) -> None:
     living = [task for task in service._tasks if not task.done()]
     assert len(living) >= 2
+
 
 # disposition: 1.4
 @pytest.mark.asyncio
@@ -594,6 +616,7 @@ async def test_new_path_start_discovery_does_not_start_scan_loop() -> None:
     assert living == []
     await service.close()
 
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_refresh_all_public_updates_cache(service: MockDiscoveryService) -> None:
@@ -603,6 +626,7 @@ async def test_refresh_all_public_updates_cache(service: MockDiscoveryService) -
     await controller.refresh_all()
 
     assert controller.mode == Controller.Mode.COOL
+
 
 # disposition: 1.4
 @pytest.mark.asyncio
@@ -631,6 +655,7 @@ async def test_refresh_transport_failure_nudges_scan() -> None:
     scan.assert_awaited_once()
     assert controller.bridge_connected is False
     await service.close()
+
 
 # disposition: 1.4
 @pytest.mark.asyncio
@@ -662,6 +687,7 @@ async def test_refresh_failure_scan_respects_cooldown() -> None:
     scan.assert_awaited_once()
     await service.close()
 
+
 # disposition: 1.4
 @pytest.mark.asyncio
 async def test_set_system_command_confirms_with_refresh_system() -> None:
@@ -687,6 +713,7 @@ async def test_set_system_command_confirms_with_refresh_system() -> None:
     assert any(command == "SystemON" for command, _ in controller.sent)
     await service.close()
 
+
 # disposition: 1.4
 @pytest.mark.asyncio
 async def test_zone_command_confirms_with_zone_group_refresh() -> None:
@@ -711,6 +738,7 @@ async def test_zone_command_confirms_with_zone_group_refresh() -> None:
     fetch.assert_awaited()
     assert fetch.await_args.args[0] == 0
     await service.close()
+
 
 # disposition: deprecate
 @pytest.mark.asyncio

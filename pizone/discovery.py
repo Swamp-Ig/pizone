@@ -447,6 +447,7 @@ class DiscoveryService:
         Raises:
             UnpairedBridgeError: If the probed UID is the unpaired placeholder;
                 the endpoint is not cached.
+
         """
         claimed = self._endpoint_by_host(self._claimed_endpoints, host)
         if claimed is not None:
@@ -471,6 +472,7 @@ class DiscoveryService:
 
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
+
         """
         raise_if_placeholder_uid(uid)
         if uid in self._claimed_endpoints:

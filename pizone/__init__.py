@@ -32,11 +32,7 @@ from . import power as power_mod
 from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
 from .discovery import DiscoveryService, Listener, create_discovery, discovery
-from .exceptions import (
-    ControllerCommandError,
-    ResponseDecodeError,
-    UnpairedBridgeError,
-)
+from .exceptions import ControllerCommandError, ResponseDecodeError, UnpairedBridgeError
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
 from .types import ControllerEndpoint
 from .zone import Zone
