@@ -1,5 +1,11 @@
 """Tests for controller HTTP GET/POST internals."""
 
+# disposition: 1.4 | deprecate  (untagged = keep)
+#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
+#   1.4       — new consumer-driven discovery / refresh API
+#   deprecate — legacy track; grep and delete when dual-track ends
+#               (sticky within a function until the next disposition tag).
+
 from typing import cast
 
 import aiohttp

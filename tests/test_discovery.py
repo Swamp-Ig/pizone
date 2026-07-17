@@ -1,5 +1,11 @@
 """Tests for discovery, controller refresh, and reconnect behavior."""
 
+# disposition: 1.4 | deprecate  (untagged = keep)
+#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
+#   1.4       — new consumer-driven discovery / refresh API
+#   deprecate — legacy track; grep and delete when dual-track ends
+#               (sticky within a function until the next disposition tag).
+
 import asyncio
 from asyncio import sleep
 from typing import cast
@@ -14,7 +20,7 @@ from pizone.discovery import DiscoveryService
 from .conftest import MockController, MockDiscoveryService, _register_mock_service
 from .http_fakes import FakeHttpResponse, FakeHttpSession
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 @patch.object(DiscoveryService, "_get_broadcasts")
 async def test_broadcast(broadcasts: MagicMock) -> None:
@@ -23,14 +29,14 @@ async def test_broadcast(broadcasts: MagicMock) -> None:
     async with discovery():
         assert broadcasts.called
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 @patch.object(DiscoveryService, "_send_broadcasts")
 async def test_messages_sent(send_broadcasts: MagicMock) -> None:
     async with discovery():
         assert send_broadcasts.called
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 @patch.object(DiscoveryService, "_send_broadcasts")
 async def test_rescan(send: MagicMock) -> None:
@@ -44,7 +50,7 @@ async def test_rescan(send: MagicMock) -> None:
 
     assert service.is_closed
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_fail_on_connect(caplog: pytest.LogCaptureFixture) -> None:
     service = MockDiscoveryService()
@@ -61,7 +67,7 @@ async def test_fail_on_connect(caplog: pytest.LogCaptureFixture) -> None:
     assert caplog.messages[0][:41] == "Can't connect to discovered server at IP "
     assert not service._controllers
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_connection_lost(
     service: MockDiscoveryService, caplog: pytest.LogCaptureFixture
@@ -95,7 +101,7 @@ async def test_concurrent_close_idempotent() -> None:
     await asyncio.gather(service.close(), service.close())
     assert service.is_closed
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_discovery(service: MockDiscoveryService) -> None:
     assert len(service._controllers) == 1
@@ -110,7 +116,7 @@ async def test_discovery(service: MockDiscoveryService) -> None:
     assert controller.sent[-1] == ("SystemMODE", {"SystemMODE": "cool"})
     assert controller.mode == Controller.Mode.COOL
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_legacy_discovery(legacy_service: MockDiscoveryService) -> None:
     service = legacy_service
@@ -127,7 +133,7 @@ async def test_legacy_discovery(legacy_service: MockDiscoveryService) -> None:
     assert controller.sent[-1] == ("SystemMODE", {"SystemMODE": "cool"})
     assert controller.mode == Controller.Mode.COOL
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_ip_addr_change(service: MockDiscoveryService) -> None:
     """Verify that IP address changes are handled."""
@@ -224,7 +230,7 @@ async def test_disconnected_reads_return_cached_state(
     with pytest.raises(ConnectionError):
         await controller.set_mode(Controller.Mode.COOL)
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_reconnect(
     service: MockDiscoveryService, caplog: pytest.LogCaptureFixture
@@ -252,7 +258,7 @@ async def test_reconnect(
     await controller.set_mode(Controller.Mode.COOL)
     assert controller.sent[-1] == ("SystemMODE", {"SystemMODE": "cool"})
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_reconnect_listener(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -309,7 +315,7 @@ async def test_reconnect_listener(service: MockDiscoveryService) -> None:
 
     assert len(calls) == 4
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_rescan_cooldown_suppression(
     service: MockDiscoveryService,
@@ -324,7 +330,7 @@ async def test_rescan_cooldown_suppression(
         await service.fetch_controllers(timeout=0.1)
         assert rescan.call_count == 1
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_fetch_controller_already_known(
     service: MockDiscoveryService,
@@ -334,7 +340,7 @@ async def test_fetch_controller_already_known(
     assert controller is not None
     assert controller.device_uid == "000000001"
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_fetch_controller_unknown_no_timeout(
     service: MockDiscoveryService,
@@ -343,7 +349,7 @@ async def test_fetch_controller_unknown_no_timeout(
     controller = await service.fetch_controller("unknown_uid")
     assert controller is None
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_fetch_controller_unknown_timeout_expires(
     service: MockDiscoveryService,
@@ -352,7 +358,7 @@ async def test_fetch_controller_unknown_timeout_expires(
     controller = await service.fetch_controller("unknown_uid", timeout=0.1)
     assert controller is None
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_fetch_controllers_no_timeout(
     service: MockDiscoveryService,
@@ -362,7 +368,7 @@ async def test_fetch_controllers_no_timeout(
     assert len(controllers) == 1
     assert "000000001" in controllers
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_fetch_controllers_with_timeout(
     service: MockDiscoveryService,
@@ -372,7 +378,7 @@ async def test_fetch_controllers_with_timeout(
     assert len(controllers) == 1
     assert "000000001" in controllers
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_listener_controller_discovered_on_add(
     service: MockDiscoveryService,
@@ -392,7 +398,7 @@ async def test_listener_controller_discovered_on_add(
     assert len(calls) == 1
     assert calls[0] == ("discovered", "000000001")
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_failed_init_deduplicated() -> None:
     service = MockDiscoveryService()
@@ -408,10 +414,10 @@ async def test_failed_init_deduplicated() -> None:
     assert initialize.call_count == 1
     assert "000000002" not in service._controllers
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
-    """Legacy pathway: iZoneChanged_System is recognized and ignored (no refresh)."""
+    """iZoneChanged_System is recognized and ignored (no refresh)."""
     controller = cast(MockController, service._controllers["000000001"])
     controller.resources["SystemSettings"]["SysMode"] = "cool"
     controller._system_settings["SysMode"] = "heat"
@@ -424,10 +430,10 @@ async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
 
     assert controller.mode == Controller.Mode.HEAT
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
-    """Legacy pathway: iZoneChanged_Zones is recognized and ignored (no refresh)."""
+    """iZoneChanged_Zones is recognized and ignored (no refresh)."""
     controller = cast(MockController, service._controllers["000000001"])
     controller.resources["Zones1_4"][0]["Name"] = "UPDATED"
     controller.zones[0]._zone_data["Name"] = "LIVING"
@@ -440,7 +446,7 @@ async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
 
     assert controller.zones[0].name == "LIVING"
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_x_ac_flag_discovery() -> None:
     """Bridges that report X for the AC slot should still be discovered."""
@@ -474,7 +480,7 @@ async def test_invalid_discovery_message(
 
     await service.close()
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_ipower_discovery(ipower_service: MockDiscoveryService) -> None:
     assert "000000003" in ipower_service._controllers
@@ -482,7 +488,7 @@ async def test_ipower_discovery(ipower_service: MockDiscoveryService) -> None:
     assert controller.power is not None
     assert controller.power.enabled is True
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_discovery_factory_registers_listener() -> None:
     class TestListener(Listener):
@@ -493,7 +499,7 @@ async def test_discovery_factory_registers_listener() -> None:
     service = discovery(listener)
     assert listener in service._listeners
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_retry_connection(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -572,7 +578,7 @@ async def test_send_command_http_404_restores_connection(
 
     assert controller.connected
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_send_command_error_fires_reconnected_listener(
     service: MockDiscoveryService,

@@ -1,5 +1,11 @@
 """Tests for zone property reads and command validation."""
 
+# disposition: 1.4 | deprecate  (untagged = keep)
+#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
+#   1.4       — new consumer-driven discovery / refresh API
+#   deprecate — legacy track; grep and delete when dual-track ends
+#               (sticky within a function until the next disposition tag).
+
 from typing import cast
 
 import pytest
@@ -8,7 +14,7 @@ from pizone import Zone
 
 from .conftest import MockController, MockDiscoveryService
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_zone_property_reads(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -23,7 +29,7 @@ async def test_zone_property_reads(service: MockDiscoveryService) -> None:
     assert zone.airflow_min == 0
     assert zone.airflow_max == 90
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_min(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -37,7 +43,7 @@ async def test_set_airflow_min(service: MockDiscoveryService) -> None:
     )
     assert zone.airflow_min == 20
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_max(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -51,7 +57,7 @@ async def test_set_airflow_max(service: MockDiscoveryService) -> None:
     )
     assert zone.airflow_max == 80
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -66,7 +72,7 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
     assert zone.mode == Zone.Mode.AUTO
     assert zone.temp_setpoint == 22.0
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -82,7 +88,7 @@ async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
     await zone.set_mode(Zone.Mode.CLOSE)
     assert zone.mode == Zone.Mode.CLOSE
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
@@ -92,7 +98,7 @@ async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None
     with pytest.raises(AttributeError, match="out of range"):
         await zone.set_airflow_min(110)
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
@@ -102,7 +108,7 @@ async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None
     with pytest.raises(AttributeError, match="out of range"):
         await zone.set_airflow_max(110)
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -117,7 +123,7 @@ async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> No
     with pytest.raises(AttributeError, match="out of range"):
         await zone.set_temp_setpoint(35.0)
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -127,7 +133,7 @@ async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None
     with pytest.raises(AttributeError, match="Can't use auto mode on open/close zone"):
         await zone.set_mode(Zone.Mode.AUTO)
 
-
+# disposition: deprecate
 @pytest.mark.asyncio
 async def test_update_zone_index_mismatch(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]

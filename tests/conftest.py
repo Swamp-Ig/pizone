@@ -1,5 +1,10 @@
 """Shared test fixtures and network-free controller doubles."""
 
+# disposition: 1.4 | deprecate  (untagged = keep)
+#   keep      — default; no tag required. Shared dual-track fixtures/helpers.
+#   1.4       — new consumer-driven discovery / refresh API
+#   deprecate — legacy track; grep and delete when dual-track ends
+
 from asyncio import Event, wait_for
 from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
@@ -148,9 +153,10 @@ def enable_power() -> Iterator[None]:
         power_mod.ENABLE_POWER = previous
 
 
+# disposition: deprecate
 @pytest.fixture
 async def service() -> AsyncIterator[MockDiscoveryService]:
-    """Async fixture providing a mock discovery service with a pre-discovered controller."""
+    """Mock discovery service with a pre-discovered controller."""
     svc = MockDiscoveryService(legacy_pathway=True)
 
     await _register_mock_service(
@@ -162,9 +168,10 @@ async def service() -> AsyncIterator[MockDiscoveryService]:
     await svc.close()
 
 
+# disposition: deprecate
 @pytest.fixture
 async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
-    """Async fixture providing a mock discovery service with legacy discovery message."""
+    """Mock discovery service with a minimal iZone datagram (no feature flags)."""
     svc = MockDiscoveryService(legacy_pathway=True)
 
     await _register_mock_service(svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
@@ -174,11 +181,12 @@ async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
     await svc.close()
 
 
+# disposition: deprecate
 @pytest.fixture
 async def ipower_service(
     enable_power: None,
 ) -> AsyncIterator[MockDiscoveryService]:
-    """Mock discovery service with an initialized iPower controller (no UDP bind)."""
+    """Mock discovery service with an initialized iPower controller."""
     del enable_power
     svc = MockDiscoveryService(legacy_pathway=True)
     controller = MockController.from_discovery(
@@ -190,6 +198,27 @@ async def ipower_service(
         is_ipower=True,
     )
     svc._controllers["000000003"] = controller
+    await controller._initialize()
+
+    yield svc
+
+    await svc.close()
+
+
+# disposition: 1.4
+@pytest.fixture
+async def service_14() -> AsyncIterator[MockDiscoveryService]:
+    """Mock discovery service with a pre-initialized controller (no poll/scan loops)."""
+    svc = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000001",
+        device_ip="8.8.8.8",
+        is_v2=False,
+        is_ipower=False,
+    )
+    svc._controllers["000000001"] = controller
     await controller._initialize()
 
     yield svc

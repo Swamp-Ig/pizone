@@ -1,5 +1,11 @@
 """Hardware tests for a live iZone controller."""
 
+# disposition: 1.4 | deprecate  (untagged = keep)
+#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
+#   1.4       — new consumer-driven discovery / refresh API
+#   deprecate — legacy track; grep and delete when dual-track ends
+#               (sticky within a function until the next disposition tag).
+
 from asyncio import Event, wait_for
 
 import pytest
@@ -67,7 +73,7 @@ def dump_data(ctrl: Controller) -> None:
             f"airflow_min:{zone.airflow_min} airflow_max:{zone.airflow_max}"
         )
 
-
+# disposition: deprecate
 @pytest.mark.hardware
 async def test_full_stack() -> None:
     listener = ListenerTesting()
@@ -138,7 +144,7 @@ async def test_full_stack() -> None:
 
         dump_data(ctrl)
 
-
+# disposition: deprecate
 @pytest.mark.hardware
 async def test_reconnect() -> None:
     listener = ListenerTesting()
@@ -161,7 +167,7 @@ async def test_reconnect() -> None:
 
         await ctrl.set_sleep_timer(0)
 
-
+# disposition: deprecate
 @pytest.mark.hardware
 @pytest.mark.usefixtures("enable_power")
 async def test_power() -> None:

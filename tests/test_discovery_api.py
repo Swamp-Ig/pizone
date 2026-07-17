@@ -1,5 +1,11 @@
 """Tests for the pizone 1.4 discovery API."""
 
+# disposition: 1.4 | deprecate  (untagged = keep)
+#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
+#   1.4       — new consumer-driven discovery / refresh API
+#   deprecate — legacy track; grep and delete when dual-track ends
+#               (sticky within a function until the next disposition tag).
+
 import asyncio
 import sys
 from typing import cast
@@ -40,7 +46,7 @@ def _system_settings_response(uid: str) -> FakeHttpResponse:
 def _probe_result(uid: str, host: str) -> tuple[ControllerEndpoint, dict[str, object]]:
     return ControllerEndpoint(uid=uid, host=host), _system_settings(uid)
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_discovery_singleton() -> None:
     """create_discovery is one-shot and close clears the global."""
@@ -56,7 +62,7 @@ async def test_create_discovery_singleton() -> None:
         await disco.close()
     assert discovery_module._active_discovery is None
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -68,7 +74,7 @@ async def test_discover_by_host() -> None:
     assert endpoint == ControllerEndpoint(uid="000025841", host="10.0.0.90")
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_unreachable() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -80,7 +86,7 @@ async def test_discover_by_host_unreachable() -> None:
     assert endpoint is None
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_uses_known_cache() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -97,7 +103,7 @@ async def test_discover_by_host_uses_known_cache() -> None:
     assert endpoint == ControllerEndpoint(uid="000025841", host="10.0.0.90")
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_raises_if_controller_exists() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -114,7 +120,7 @@ async def test_discover_by_host_raises_if_controller_exists() -> None:
         await service.discover_by_host("10.0.0.90")
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_uid() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -138,7 +144,7 @@ async def test_discover_by_uid() -> None:
     assert endpoint == ControllerEndpoint(uid="000025841", host="10.0.0.90")
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_uid_raises_if_controller_exists() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -156,7 +162,7 @@ async def test_discover_by_uid_raises_if_controller_exists() -> None:
     scan.assert_not_awaited()
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_invokes_callback() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -183,7 +189,7 @@ async def test_discover_all_invokes_callback() -> None:
     assert discovered == endpoints
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_notifies_known_without_new_datagram() -> None:
     """User scan notifies once for already-known same-host (no wait-window ASPort)."""
@@ -208,7 +214,7 @@ async def test_discover_all_notifies_known_without_new_datagram() -> None:
     assert discovered == endpoints
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_dedupes_udp_and_verify_notify() -> None:
     """ASPort during wait + verify must not double-fire on_endpoint_discovered."""
@@ -235,7 +241,7 @@ async def test_discover_all_dedupes_udp_and_verify_notify() -> None:
     assert discovered == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_passive_asport_notifies_new_only() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -249,7 +255,7 @@ async def test_passive_asport_notifies_new_only() -> None:
     assert discovered == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_passive_asport_notifies_on_host_change() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -272,7 +278,7 @@ async def test_passive_asport_notifies_on_host_change() -> None:
     assert service._known_endpoints["000025841"].host == "10.0.0.91"
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -298,7 +304,7 @@ async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
     assert service._claimed_endpoints["000025841"].host == "10.0.0.91"
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_claimed_asport_same_host_silent() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -323,7 +329,7 @@ async def test_claimed_asport_same_host_silent() -> None:
     assert seen == []
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_close_does_not_fire_on_endpoint_discovered() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -340,7 +346,7 @@ async def test_close_does_not_fire_on_endpoint_discovered() -> None:
     assert "000025841" in service._known_endpoints
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_changed_datagrams_ignored_on_14_path() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -355,7 +361,7 @@ async def test_changed_datagrams_ignored_on_14_path() -> None:
     assert service._known_endpoints == {}
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_calls_are_serialized() -> None:
     """Concurrent discover_all calls must not overlap shared scratch state."""
@@ -393,7 +399,7 @@ async def test_discover_calls_are_serialized() -> None:
     assert overlapped is False
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_excludes_created_controllers() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -410,7 +416,7 @@ async def test_discover_all_excludes_created_controllers() -> None:
     assert endpoints == []
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_includes_closed_controllers() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -432,7 +438,7 @@ async def test_discover_all_includes_closed_controllers() -> None:
     assert endpoints == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_scan_sends_broadcast() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -442,7 +448,7 @@ async def test_scan_sends_broadcast() -> None:
     send_broadcasts.assert_called_once()
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_success() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -458,7 +464,7 @@ async def test_create_controller_success() -> None:
     assert session.get_calls == 1
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_raises_if_uid_exists() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -471,7 +477,7 @@ async def test_create_controller_raises_if_uid_exists() -> None:
         await service.create_controller("000025841", "10.0.0.90")
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_address_fallback() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -502,7 +508,7 @@ async def test_create_controller_address_fallback() -> None:
     assert controller.device_ip == "10.0.0.90"
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_address_changed_after_return() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
@@ -546,7 +552,7 @@ async def test_create_controller_address_changed_after_return() -> None:
     assert seen == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
     await service.close()
 
-
+# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_no_retry_on_command_error() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
