@@ -19,7 +19,7 @@ from types import TracebackType
 from typing import Any, Self, cast
 
 import aiohttp
-from aiohttp import ClientSession
+from aiohttp import ClientSession, TCPConnector
 import ifaddr
 
 from .const import PLACEHOLDER_DEVICE_UID
@@ -293,7 +293,8 @@ class DiscoveryService:
 
         """
         if self._own_session:
-            self._session = ClientSession()
+            # Mitigation for hubs that stall under HTTP reuse (core#176536).
+            self._session = ClientSession(connector=TCPConnector(force_close=True))
 
         _svc = self
 
@@ -664,6 +665,7 @@ class DiscoveryService:
         try:
             async with session.get(
                 f"http://{host}/SystemSettings",
+                headers={"Connection": "close"},
                 timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
             ) as response:
                 if response.status >= 400:
