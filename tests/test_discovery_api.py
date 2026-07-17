@@ -15,13 +15,13 @@ from aiohttp import ClientSession
 import pytest
 
 from pizone import (
-    PLACEHOLDER_DEVICE_UID,
     Controller,
     ControllerCommandError,
     ControllerEndpoint,
     UnpairedBridgeError,
     create_discovery,
 )
+from pizone.const import PLACEHOLDER_DEVICE_UID
 from pizone.discovery import DiscoveryService
 
 from .conftest import MockController, MockDiscoveryService
