@@ -50,7 +50,7 @@ DISCOVERY_RESCAN = 20.0
 RESCAN_COOLDOWN = 5.0
 
 # disposition: 1.4 — active discover_by_uid / discover_all wait
-SCAN_TIMEOUT = 20.0
+SCAN_TIMEOUT = 5.0
 
 _LOG = logging.getLogger("pizone.discovery")
 
