@@ -10,7 +10,7 @@ import asyncio
 import errno
 import sys
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import ClientSession
 import pytest
@@ -623,7 +623,7 @@ async def test_discover_all_includes_closed_controllers() -> None:
 @pytest.mark.asyncio
 async def test_scan_sends_broadcast() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
-    service._transport = MagicMock()
+    await service.start_discovery()
     with patch.object(service, "_send_broadcasts") as send_broadcasts:
         await service.scan()
     send_broadcasts.assert_called_once()

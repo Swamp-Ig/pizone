@@ -756,8 +756,13 @@ class DiscoveryService:
             return
         _LOG.info("Close called on discovery service.")
         self._close_task = current
-        if self._transport:
+        if self._transport is not None:
+            # DatagramTransport.close() only schedules sock release via
+            # call_soon(_call_connection_lost). Wait until connection_lost
+            # clears _transport so a following create_discovery can bind :7005.
             self._transport.close()
+            while self._transport is not None:
+                await asyncio.sleep(0)
 
         pending = [task for task in list(self._tasks) if task is not current]
         for task in pending:
@@ -773,6 +778,7 @@ class DiscoveryService:
 
     def _on_connection_lost(self, exc: Exception | None) -> None:
         _LOG.debug("Connection Lost")
+        self._transport = None
         if not self._close_task:
             _LOG.error("Connection Lost unexpectedly: %s", repr(exc))
             self.create_task(self.close())
