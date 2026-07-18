@@ -7,6 +7,7 @@
 #               (sticky within a function until the next disposition tag).
 
 import asyncio
+import errno
 import sys
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -64,6 +65,164 @@ async def test_create_discovery_singleton() -> None:
             await create_discovery()
         await disco.close()
     assert discovery_module._active_discovery is None
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_close_then_immediate_create_discovery_rebinds() -> None:
+    """close() must release UDP :7005 before returning so a new create can bind.
+
+    Reproduces the delete→HomeKit race: stop discovery then immediately start
+    again on the same event loop without awaiting an extra sleep.
+
+    Use an injected session (as Home Assistant does) so close() does not await
+    an owned ClientSession — that await can mask the teardown race.
+    """
+    session = ClientSession()
+    try:
+        first = await create_discovery(session=session)
+        await first.close()
+        assert discovery_module._active_discovery is None
+
+        second = await create_discovery(session=session)
+        try:
+            assert second is not first
+            assert discovery_module._active_discovery is second
+        finally:
+            await second.close()
+        assert discovery_module._active_discovery is None
+    finally:
+        leftover = discovery_module._active_discovery
+        if leftover is not None:
+            await leftover.close()
+        await session.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_owned_session_close_still_needs_udp_teardown_wait() -> None:
+    """Owned-session await must not be treated as sufficient UDP teardown.
+
+    CPython asyncio schedules ``DatagramTransport`` sock close via
+    ``call_soon(_call_connection_lost)``. The next ``await`` (owned
+    ``ClientSession.close``) usually runs that callback first — FIFO
+    ``call_soon`` behaviour, not a language/compiler guarantee. Defer the
+    callback so only waiting on ``connection_lost`` (Fix A) makes rebind safe.
+    """
+    loop = asyncio.get_running_loop()
+    real_call_soon = loop.call_soon
+    teardown_delay = 0.05
+
+    def call_soon(callback: object, *args: object, context: object = None) -> object:
+        if getattr(callback, "__name__", None) == "_call_connection_lost":
+            return loop.call_later(teardown_delay, callback, *args)
+        if context is not None:
+            return real_call_soon(callback, *args, context=context)
+        return real_call_soon(callback, *args)
+
+    first = await create_discovery()
+    try:
+        with patch.object(loop, "call_soon", call_soon):
+            await first.close()
+        assert discovery_module._active_discovery is None
+
+        second = await create_discovery()
+        try:
+            assert second is not first
+            assert discovery_module._active_discovery is second
+        finally:
+            await second.close()
+        assert discovery_module._active_discovery is None
+    finally:
+        await asyncio.sleep(teardown_delay + 0.01)
+        leftover = discovery_module._active_discovery
+        if leftover is not None:
+            await leftover.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_create_discovery_failed_start_allows_retry() -> None:
+    """Failed start_discovery must not leave the process singleton set.
+
+    Otherwise later create_discovery calls raise RuntimeError until process
+    restart (HomeKit rediscovery / SETUP_RETRY poisoned after EADDRINUSE).
+    """
+    try:
+        with (
+            patch.object(
+                DiscoveryService,
+                "start_discovery",
+                AsyncMock(
+                    side_effect=OSError(errno.EADDRINUSE, "Address already in use")
+                ),
+            ),
+            pytest.raises(OSError, match="Address already in use"),
+        ):
+            await create_discovery()
+
+        assert discovery_module._active_discovery is None
+
+        with patch.object(DiscoveryService, "start_discovery", AsyncMock()):
+            disco = await create_discovery()
+            try:
+                assert disco is discovery_module._active_discovery
+            finally:
+                await disco.close()
+        assert discovery_module._active_discovery is None
+    finally:
+        leftover = discovery_module._active_discovery
+        if leftover is not None:
+            await leftover.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_failed_start_holds_singleton_until_close_finishes() -> None:
+    """Overlapping create during failed-start cleanup must hit already-created.
+
+    ``create_discovery`` must not clear the process singleton before ``close()``
+    finishes, so a client that serializes create→close→create cannot bind
+    against a service still tearing down.
+    """
+    original_close = DiscoveryService.close
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    held_during_close: list[bool] = []
+
+    async def gated_close(self: DiscoveryService) -> None:
+        held_during_close.append(discovery_module._active_discovery is self)
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(self)
+
+    try:
+        with (
+            patch.object(
+                DiscoveryService,
+                "start_discovery",
+                AsyncMock(
+                    side_effect=OSError(errno.EADDRINUSE, "Address already in use")
+                ),
+            ),
+            patch.object(DiscoveryService, "close", gated_close),
+        ):
+            create_task = asyncio.create_task(create_discovery())
+            await asyncio.wait_for(close_entered.wait(), timeout=1)
+            assert discovery_module._active_discovery is not None
+            with pytest.raises(RuntimeError, match="already created"):
+                await create_discovery()
+            finish_close.set()
+            with pytest.raises(OSError, match="Address already in use"):
+                await create_task
+
+        assert held_during_close == [True]
+        assert discovery_module._active_discovery is None
+    finally:
+        finish_close.set()
+        leftover = discovery_module._active_discovery
+        if leftover is not None:
+            await leftover.close()
 
 
 # disposition: 1.4
