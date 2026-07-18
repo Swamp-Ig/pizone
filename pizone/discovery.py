@@ -1002,5 +1002,12 @@ async def create_discovery(
         on_endpoint_discovered=on_endpoint_discovered,
     )
     _active_discovery = service
-    await service.start_discovery()
+    try:
+        await service.start_discovery()
+    except BaseException:
+        # close() clears the global when it finishes; clear again if close never ran.
+        with suppress(BaseException):
+            await service.close()
+        _clear_discovery_global(service)
+        raise
     return service
