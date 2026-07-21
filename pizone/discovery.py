@@ -24,7 +24,7 @@ import ifaddr
 
 from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
-from .exceptions import raise_if_placeholder_uid
+from .exceptions import ControllerAlreadyClaimedError, raise_if_placeholder_uid
 from .types import ControllerEndpoint
 from .zone import Zone
 
@@ -405,7 +405,9 @@ class DiscoveryService:
     def _ensure_endpoint_available(self, endpoint: ControllerEndpoint) -> None:
         """Raise if *endpoint* is already claimed."""
         if endpoint.uid in self._claimed_endpoints:
-            raise RuntimeError(f"Controller {endpoint.uid} already created")
+            raise ControllerAlreadyClaimedError(
+                f"Controller {endpoint.uid} already created"
+            )
 
     # disposition: 1.4
     def _claim_endpoint(self, endpoint: ControllerEndpoint) -> None:
@@ -451,7 +453,9 @@ class DiscoveryService:
         """
         claimed = self._endpoint_by_host(self._claimed_endpoints, host)
         if claimed is not None:
-            raise RuntimeError(f"Controller {claimed.uid} already created")
+            raise ControllerAlreadyClaimedError(
+                f"Controller {claimed.uid} already created"
+            )
         known = self._endpoint_by_host(self._known_endpoints, host)
         if known is not None:
             return known
@@ -476,7 +480,7 @@ class DiscoveryService:
         """
         raise_if_placeholder_uid(uid)
         if uid in self._claimed_endpoints:
-            raise RuntimeError(f"Controller {uid} already created")
+            raise ControllerAlreadyClaimedError(f"Controller {uid} already created")
         endpoint = self._known_endpoints.get(uid)
         if endpoint is not None:
             return endpoint
@@ -569,7 +573,7 @@ class DiscoveryService:
 
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
-            RuntimeError: If a controller with *uid* already exists.
+            ControllerAlreadyClaimedError: If a controller with *uid* already exists.
             ConnectionError: If the controller cannot be reached after
                 address fallback.
             ControllerCommandError: If the device rejects the protocol request.
@@ -579,7 +583,7 @@ class DiscoveryService:
         """
         raise_if_placeholder_uid(uid)
         if uid in self._claimed_endpoints:
-            raise RuntimeError(f"Controller {uid} already created")
+            raise ControllerAlreadyClaimedError(f"Controller {uid} already created")
         pending_address_changed: ControllerEndpoint | None = None
 
         try:

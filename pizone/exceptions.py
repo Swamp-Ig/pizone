@@ -28,6 +28,14 @@ class UnpairedBridgeError(ValueError):
     """
 
 
+class ControllerAlreadyClaimedError(Exception):
+    """A controller UID or host is already claimed on this discovery service.
+
+    Raised when ``discover_by_host``, ``discover_by_uid``, or ``create_controller``
+    would duplicate an active controller registration.
+    """
+
+
 def raise_if_placeholder_uid(uid: str) -> None:
     """Raise :exc:`UnpairedBridgeError` if *uid* is the unpaired placeholder."""
     if uid == PLACEHOLDER_DEVICE_UID:

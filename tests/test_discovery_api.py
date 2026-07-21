@@ -17,6 +17,7 @@ import pytest
 
 from pizone import (
     Controller,
+    ControllerAlreadyClaimedError,
     ControllerCommandError,
     ControllerEndpoint,
     UnpairedBridgeError,
@@ -282,7 +283,7 @@ async def test_discover_by_host_raises_if_controller_exists() -> None:
         ClientSession,
         FakeHttpSession(get_error=OSError("should not probe")),
     )
-    with pytest.raises(RuntimeError, match="already created"):
+    with pytest.raises(ControllerAlreadyClaimedError, match="already created"):
         await service.discover_by_host("10.0.0.90")
     await service.close()
 
@@ -324,7 +325,7 @@ async def test_discover_by_uid_raises_if_controller_exists() -> None:
     scan = AsyncMock()
     with (
         patch.object(service, "scan", scan),
-        pytest.raises(RuntimeError, match="already created"),
+        pytest.raises(ControllerAlreadyClaimedError, match="already created"),
     ):
         await service.discover_by_uid("000025841")
     scan.assert_not_awaited()
@@ -656,7 +657,7 @@ async def test_create_controller_raises_if_uid_exists() -> None:
         FakeHttpSession(get_response=_system_settings_response("000025841")),
     )
     await service.create_controller("000025841", "10.0.0.90")
-    with pytest.raises(RuntimeError, match="already created"):
+    with pytest.raises(ControllerAlreadyClaimedError, match="already created"):
         await service.create_controller("000025841", "10.0.0.90")
     await service.close()
 
