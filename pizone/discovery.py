@@ -549,7 +549,7 @@ class DiscoveryService:
                     continue
                 try:
                     self._cache_endpoint(endpoint)
-                except RuntimeError:
+                except ControllerAlreadyClaimedError:
                     continue
                 verified.append(endpoint)
                 if endpoint.uid not in notified:
@@ -799,8 +799,13 @@ class DiscoveryService:
         """Return the aiohttp session used for HTTP requests."""
         return self._session
 
-    def _on_error_received(self, _: Exception) -> None:
-        _LOG.warning("Error passed and ignored to error_received", exc_info=True)
+    def _on_error_received(self, exc: Exception) -> None:
+        # Expected when broadcast is blocked (firewall / no permission) or the
+        # interface is down; scan just finds nothing. Keep unexpected errors loud.
+        if isinstance(exc, OSError):
+            _LOG.debug("UDP error ignored: %s", exc)
+            return
+        _LOG.warning("Error passed and ignored to error_received: %s", exc)
 
     def _find_by_addr(self, addr: tuple[str, int]) -> Controller | None:
         for ctrl in self._controllers.values():

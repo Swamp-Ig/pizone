@@ -588,9 +588,14 @@ async def test_discover_all_excludes_created_controllers() -> None:
         FakeHttpSession(get_response=_system_settings_response("000025841")),
     )
     await service.create_controller("000025841", "10.0.0.90")
+
+    async def _scan_reports_claimed() -> None:
+        assert service._scan_collector is not None
+        service._scan_collector["000025841"] = "10.0.0.90"
+
     with (
         patch("pizone.discovery.asyncio.sleep", AsyncMock()),
-        patch.object(service, "scan", AsyncMock()),
+        patch.object(service, "scan", side_effect=_scan_reports_claimed),
     ):
         endpoints = await service.discover_all()
     assert endpoints == []
