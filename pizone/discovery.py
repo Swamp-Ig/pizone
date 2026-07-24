@@ -928,8 +928,7 @@ class DiscoveryService:
         previous = self._known_endpoints.get(endpoint.uid)
         newly_seen = previous is None
         host_changed = previous is not None and previous.host != endpoint.host
-        with suppress(RuntimeError):
-            self._cache_endpoint(endpoint)
+        self._cache_endpoint(endpoint)
         if newly_seen or host_changed:
             self._emit_endpoint_discovered(endpoint)
 
