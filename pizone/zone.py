@@ -4,7 +4,7 @@ Properties for reading and setting zone data.
 """
 
 from enum import Enum
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -67,6 +67,10 @@ class Zone:
     def index(self) -> int:
         """The index of the zone."""
         return self._index
+
+    def dump_state(self) -> dict[str, Any]:
+        """Return a JSON-friendly snapshot of cached zone state."""
+        return dict(self._zone_data)
 
     @property
     def name(self) -> str:

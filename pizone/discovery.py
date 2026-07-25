@@ -10,11 +10,14 @@ from asyncio import (
     Lock,
     Task,
 )
+from collections import deque
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import suppress
+from datetime import UTC, datetime
 from ipaddress import IPv4Interface
 import json
 import logging
+import time
 from types import TracebackType
 from typing import Any, Self, cast
 
@@ -51,6 +54,9 @@ RESCAN_COOLDOWN = 5.0
 
 # disposition: 1.4 — active discover_by_uid / discover_all wait
 SCAN_TIMEOUT = 5.0
+
+# Inbound UDP datagrams retained for diagnostics (ASPort, CHANGED_*, garbage).
+UDP_REPLY_BUFFER_SIZE = 20
 
 _LOG = logging.getLogger("pizone.discovery")
 
@@ -159,6 +165,8 @@ class DiscoveryService:
         self._on_endpoint_discovered = on_endpoint_discovered
         self._known_endpoints: dict[str, ControllerEndpoint] = {}
         self._claimed_endpoints: dict[str, ControllerEndpoint] = {}
+        # Ring buffer of recent inbound UDP datagrams (diagnostics).
+        self._recent_udp: deque[dict[str, Any]] = deque(maxlen=UDP_REPLY_BUFFER_SIZE)
         self._scan_collector: dict[str, str] | None = None
         self._discover_lock = Lock()
         # Set during discover_all wait so passive notifies dedupe with verify fan-out.
@@ -794,6 +802,39 @@ class DiscoveryService:
             return self._transport.is_closing()
         return self._close_task is not None
 
+    def dump_state(self) -> dict[str, Any]:
+        """Return a JSON-friendly snapshot of discovery registry state.
+
+        Does not send an IASD broadcast. Includes a ring buffer of the most
+        recent inbound UDP datagrams (excluding our own IASD echo).
+        """
+
+        def _endpoints(
+            endpoints: dict[str, ControllerEndpoint],
+        ) -> list[dict[str, str]]:
+            return [
+                {"uid": endpoint.uid, "host": endpoint.host}
+                for endpoint in endpoints.values()
+            ]
+
+        recent_udp = [
+            {
+                **reply,
+                "received_at": datetime.fromtimestamp(
+                    reply["received_at"], tz=UTC
+                ).isoformat(),
+            }
+            for reply in self._recent_udp
+        ]
+
+        return {
+            "closed": self.is_closed,
+            "udp_bound": self._transport is not None and not self.is_closed,
+            "claimed": _endpoints(self._claimed_endpoints),
+            "known": _endpoints(self._known_endpoints),
+            "recent_udp": recent_udp,
+        }
+
     @property
     def session(self) -> ClientSession | None:
         """Return the aiohttp session used for HTTP requests."""
@@ -822,6 +863,7 @@ class DiscoveryService:
     def _process_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if data == DISCOVERY_MSG:
             return
+        self._record_udp_datagram(data, addr)
         if data in (CHANGED_SYSTEM, CHANGED_ZONES, CHANGED_SCHEDULES):
             _LOG.debug("Ignoring push notification %s from %s", data, addr)
             return
@@ -829,6 +871,26 @@ class DiscoveryService:
             self._discovery_received_deprecated(data)
         else:
             self._discovery_received(data)
+
+    def _record_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Append an inbound UDP datagram to the diagnostics ring buffer."""
+        try:
+            message = data.decode()
+        except UnicodeDecodeError:
+            message = data.decode(errors="replace")
+        entry: dict[str, Any] = {
+            "source_ip": addr[0],
+            "source_port": addr[1],
+            "received_at": time.time(),
+            "message": message,
+        }
+        endpoint = self._parse_datagram(data)
+        if endpoint is not None:
+            entry["uid"] = endpoint.uid
+            entry["host"] = endpoint.host
+            parts = message.split(",")
+            entry["tags"] = parts[3:] if len(parts) > 3 else []
+        self._recent_udp.append(entry)
 
     # disposition: deprecate
     def _parse_datagram_deprecated(

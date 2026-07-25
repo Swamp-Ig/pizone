@@ -414,6 +414,25 @@ class Controller:
         """True while the bridge is up and the iZone AC subsystem is available."""
         return self._bridge_ok and self._izone_ok
 
+    def dump_state(self) -> dict[str, Any]:
+        """Return a JSON-friendly snapshot of cached controller state.
+
+        Includes connection/capability fields that are not mirrored in
+        ``SystemSettings``, plus the raw settings and zone payloads.
+        """
+        return {
+            "device_uid": self.device_uid,
+            "device_ip": self.device_ip,
+            "connected": self.connected,
+            "bridge_connected": self.bridge_connected,
+            "is_v2": self.is_v2,
+            "is_ipower": self.is_ipower,
+            "fan_modes": [fan.value for fan in self.fan_modes],
+            "system_settings": dict(self._system_settings),
+            "zones": [zone.dump_state() for zone in self.zones],
+            "power": self._power.dump_state() if self._power is not None else None,
+        }
+
     @property
     def power(self) -> Power | None:
         """Power monitor data, or ``None`` if not configured."""

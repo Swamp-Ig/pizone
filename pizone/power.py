@@ -282,6 +282,13 @@ class Power:
         self._power_ok = ok
         self._controller._event_coordinator.power_update(self._controller)  # noqa: SLF001
 
+    def dump_state(self) -> dict[str, Any]:
+        """Return a JSON-friendly snapshot of cached power monitor state."""
+        return {
+            "config": dict(self._config),
+            "status": dict(self._status),
+        }
+
     @property
     def connected(self) -> bool:
         """True while the bridge is up and power monitor I/O is healthy."""
