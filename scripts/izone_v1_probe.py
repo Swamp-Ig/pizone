@@ -4,20 +4,28 @@
 Stdlib only. Safe by default: write probes re-send the *current* SystemON /
 zone command (no-op). Pass --mutate only if you intentionally want a toggle.
 
+Network identifiers in stdout are redacted to **REDACTED** (same idea as
+Home Assistant iZone diagnostics): the CLI host argument (IP or hostname),
+IPv4/IPv6 literals (including UDP ``IP_…`` payloads), and socket peer
+addresses. Pass ``--show-ips`` only for local debugging — do not attach that
+log to a public issue.
+
 Usage:
   python3 izone_v1_probe.py <bridge-ip> --with-content-type > izone-v1-probe.log
   python3 izone_v1_probe.py 10.0.0.90 --zone 1
   python3 izone_v1_probe.py 10.0.0.90 --udp-seconds 5
 
 Canonical copy: scripts/izone_v1_probe.py on the pizone main branch.
-Attach the log on the GitHub issue (UID/IP are fine to leave in).
+Attach the log on the GitHub issue.
 Stop Home Assistant / other iZone listeners first if UDP bind on :7005 fails.
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
+import re
 import socket
 import sys
 import time
@@ -30,6 +38,61 @@ TIMEOUT = 10.0
 DISCOVERY_PORT = 12107
 LISTEN_PORT = 7005
 IASD = b"IASD"
+REDACTED = "**REDACTED**"
+_IPV4 = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
+# Candidates only; confirmed with ipaddress.IPv6Address (handles ``::``, zone ids).
+_IPV6_CANDIDATE = re.compile(
+    r"\[?(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\]?"
+    r"|\[?[0-9a-fA-F:]*::[0-9a-fA-F:]*(?:%[0-9A-Za-z._-]+)?\]?"
+)
+
+# Set from ``main``; when False, ``_print`` strips network ids from every line.
+_SHOW_IPS = False
+# Exact CLI host (IP or hostname), redacted as a substring wherever it appears.
+_HOST_TOKEN: str | None = None
+
+
+def _redact_ipv6_match(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    core = raw.strip("[]").split("%", 1)[0]
+    try:
+        ipaddress.IPv6Address(core)
+    except ValueError:
+        return raw
+    if raw.startswith("[") and raw.endswith("]"):
+        return f"[{REDACTED}]"
+    return REDACTED
+
+
+def _redact_network(text: str) -> str:
+    """Redact CLI host, IPv4/IPv6 literals (e.g. UDP ``IP_…`` payloads)."""
+    if _HOST_TOKEN:
+        text = re.sub(re.escape(_HOST_TOKEN), REDACTED, text, flags=re.IGNORECASE)
+        # urllib IPv6 URL form http://[fe80::1]/...
+        text = re.sub(
+            re.escape(f"[{_HOST_TOKEN}]"),
+            f"[{REDACTED}]",
+            text,
+            flags=re.IGNORECASE,
+        )
+    text = _IPV4.sub(REDACTED, text)
+    return _IPV6_CANDIDATE.sub(_redact_ipv6_match, text)
+
+
+def _fmt_addr(addr: str) -> str:
+    """Format a socket address for logs (always redacted unless ``--show-ips``)."""
+    return addr if _SHOW_IPS else REDACTED
+
+
+def _print(*args: object, **kwargs: Any) -> None:
+    """Print to stdout, redacting network ids unless ``--show-ips``."""
+    if _SHOW_IPS:
+        print(*args, **kwargs)
+        return
+    print(
+        *(_redact_network(a) if isinstance(a, str) else a for a in args),
+        **kwargs,
+    )
 
 
 def _req(
@@ -69,15 +132,15 @@ def _show(
     *,
     full: bool = False,
 ) -> None:
-    print(f"\n=== {label} ===")
-    print(f"status={status}  time={dt:.3f}s" + (f"  error={err}" if err else ""))
+    _print(f"\n=== {label} ===")
+    _print(f"status={status}  time={dt:.3f}s" + (f"  error={err}" if err else ""))
     if full:
         parsed = _parse_jsonish(body)
         if parsed is not None:
-            print(json.dumps(parsed, indent=2, ensure_ascii=False))
+            _print(json.dumps(parsed, indent=2, ensure_ascii=False))
             return
     snippet = body if len(body) <= 1200 else body[:1200] + f"… ({len(body)} chars)"
-    print(snippet if snippet else "(empty body)")
+    _print(snippet if snippet else "(empty body)")
 
 
 def _parse_jsonish(body: str) -> Any:
@@ -122,7 +185,7 @@ def _udp_listen(
     send_iasd: bool,
     label: str,
 ) -> None:
-    print(
+    _print(
         f"\n=== {label} (bind :{LISTEN_PORT}, "
         f"{'IASD → :' + str(DISCOVERY_PORT) + ', ' if send_iasd else ''}"
         f"{listen_seconds:.1f}s) ==="
@@ -132,11 +195,11 @@ def _udp_listen(
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     except OSError as ex:
-        print(f"SO_BROADCAST failed: {ex}")
+        _print(f"SO_BROADCAST failed: {ex}")
     try:
         sock.bind(("0.0.0.0", LISTEN_PORT))
     except OSError as ex:
-        print(
+        _print(
             f"bind :{LISTEN_PORT} failed: {ex}\n"
             "  (Stop HA / izone-v2 / another probe using that port, then retry.)"
         )
@@ -147,9 +210,9 @@ def _udp_listen(
         for addr in (("255.255.255.255", DISCOVERY_PORT), (host, DISCOVERY_PORT)):
             try:
                 sock.sendto(IASD, addr)
-                print(f"sent IASD → {addr[0]}:{addr[1]}")
+                _print(f"sent IASD → {_fmt_addr(addr[0])}:{addr[1]}")
             except OSError as ex:
-                print(f"send IASD → {addr} failed: {ex}")
+                _print(f"send IASD → {_fmt_addr(addr[0])}:{addr[1]} failed: {ex}")
 
     deadline = time.monotonic() + listen_seconds
     count = 0
@@ -159,7 +222,7 @@ def _udp_listen(
         except socket.timeout:
             continue
         except OSError as ex:
-            print(f"recv failed: {ex}")
+            _print(f"recv failed: {ex}")
             break
         text = data.decode("latin_1", errors="replace")
         count += 1
@@ -170,9 +233,9 @@ def _udp_listen(
             if text.startswith("iZoneChanged")
             else "other"
         )
-        print(f"  [{kind}] from {addr[0]}:{addr[1]}  {text!r}")
+        _print(f"  [{kind}] from {_fmt_addr(addr[0])}:{addr[1]}  {text!r}")
 
-    print(f"UDP packets received: {count}")
+    _print(f"UDP packets received: {count}")
     sock.close()
 
 
@@ -211,15 +274,23 @@ def main() -> int:
         action="store_true",
         help="Inventory + UDP only (no SystemON/ZoneCommand/FAN probes)",
     )
+    parser.add_argument(
+        "--show-ips",
+        action="store_true",
+        help="Leave host/IP addresses in stdout (local debug only; do not attach)",
+    )
     args = parser.parse_args()
-    host = args.host.strip()
-    base = f"http://{host}"
+    global _SHOW_IPS, _HOST_TOKEN
+    _SHOW_IPS = args.show_ips
+    host = args.host.strip().strip("[]")
+    _HOST_TOKEN = host or None
+    base = f"http://{host}" if ":" not in host else f"http://[{host}]"
     ct_modes = [False]
     if args.with_content_type:
         ct_modes.append(True)
 
-    print(f"iZone V1/V2 probe against {host}")
-    print(f"python={sys.version.split()[0]}  timeout={TIMEOUT}s")
+    _print(f"iZone V1/V2 probe against {host}")
+    _print(f"python={sys.version.split()[0]}  timeout={TIMEOUT}s")
 
     if not args.skip_udp:
         _udp_listen(
@@ -239,7 +310,7 @@ def main() -> int:
             zone_count = int(settings.get("NoOfZones") or 0)
         except (TypeError, ValueError):
             zone_count = 0
-        print(
+        _print(
             f"\nsummary: UID={settings.get('AirStreamDeviceUId')!r} "
             f"SysType={settings.get('SysType')!r} "
             f"NoOfZones={zone_count} SysOn={settings.get('SysOn')!r} "
@@ -255,9 +326,9 @@ def main() -> int:
             all_v1_zones.extend(_zones_as_list(_parse_jsonish(body)))
 
     if all_v1_zones:
-        print("\n=== V1 zone summary ===")
+        _print("\n=== V1 zone summary ===")
         for z in all_v1_zones:
-            print(
+            _print(
                 f"  idx={z.get('Index')} name={z.get('Name')!r} "
                 f"type={z.get('Type')!r} mode={z.get('Mode')!r} "
                 f"setpoint={z.get('SetPoint')!r} temp={z.get('Temp')!r}"
@@ -282,7 +353,7 @@ def main() -> int:
     if isinstance(parsed, dict):
         sys_v2 = parsed.get("SystemV2")
         if isinstance(sys_v2, dict):
-            print(
+            _print(
                 f"\nV2 summary: UID={parsed.get('AirStreamDeviceUId')!r} "
                 f"SysOn={sys_v2.get('SysOn')!r} SysMode={sys_v2.get('SysMode')!r} "
                 f"SysFan={sys_v2.get('SysFan')!r} NoOfZones={sys_v2.get('NoOfZones')!r}"
@@ -311,7 +382,7 @@ def main() -> int:
         )
 
     if args.skip_writes:
-        print("\n(--skip-writes) Done. Please attach the log on the issue. Thanks!")
+        _print("\n(--skip-writes) Done. Please attach the log on the issue. Thanks!")
         return 0
 
     # --- Content-Type comparison on V2 request (shape probe) ---
@@ -332,8 +403,8 @@ def main() -> int:
 
     # --- safe writes ---
     if not isinstance(settings, dict):
-        print("\nSkipping V1 write probes — SystemSettings missing/unparsed.")
-        print("\nDone. Please attach the log on the issue. Thanks!")
+        _print("\nSkipping V1 write probes — SystemSettings missing/unparsed.")
+        _print("\nDone. Please attach the log on the issue. Thanks!")
         return 0
 
     sys_on = settings.get("SysOn")
@@ -341,7 +412,7 @@ def main() -> int:
         target = sys_on
         if args.mutate:
             target = "off" if sys_on == "on" else "on"
-            print(f"\n--mutate: toggling SystemON {sys_on!r} → {target!r}")
+            _print(f"\n--mutate: toggling SystemON {sys_on!r} → {target!r}")
         payload = {"SystemON": target}
         for use_ct in ct_modes:
             label = (
@@ -371,7 +442,7 @@ def main() -> int:
                     err,
                 )
     else:
-        print(f"\nSkipping SystemON write — unexpected SysOn={sys_on!r}")
+        _print(f"\nSkipping SystemON write — unexpected SysOn={sys_on!r}")
 
     # Zone no-op from inventoried V1 zones
     z_match = next(
@@ -399,7 +470,7 @@ def main() -> int:
             )
             _show(label, status, body, dt, err)
     else:
-        print(f"\nSkipping ZoneCommand — no V1 zone data for zone {args.zone}")
+        _print(f"\nSkipping ZoneCommand — no V1 zone data for zone {args.zone}")
 
     for use_ct in ct_modes:
         label = 'POST /SystemFAN {"SystemFAN":"top"} (V1 out-of-spec probe)'
@@ -422,7 +493,7 @@ def main() -> int:
             label="UDP post-write listen (iZoneChanged_*?)",
         )
 
-    print("\nDone. Please attach the log on the issue. Thanks!")
+    _print("\nDone. Please attach the log on the issue. Thanks!")
     return 0
 
 

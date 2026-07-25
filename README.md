@@ -46,8 +46,11 @@ curl -fsSL -o izone_v1_probe.py \
 python3 izone_v1_probe.py <bridge-ip> --with-content-type > izone-v1-probe.log
 ```
 
-Attach `izone-v1-probe.log` to the GitHub issue. Stop Home Assistant (or other
-listeners on UDP 7005) first if the UDP listen step fails to bind.
+Attach `izone-v1-probe.log` to the GitHub issue. The CLI host (IP or hostname)
+and IPv4/IPv6 literals in the log are redacted to `**REDACTED**` by default
+(including UDP `IP_…` payloads); use `--show-ips` only for local debugging.
+Stop Home Assistant (or other listeners on UDP 7005) first if the UDP listen
+step fails to bind.
 
 ## Development
 
