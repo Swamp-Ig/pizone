@@ -32,6 +32,23 @@ needed for iZone controllers that read the request in a single operation.
 The iZone Ethernet interface is documented in
 [AC-DOC-1401-11_iZoneEthernetInterface.pdf](./AC-DOC-1401-11_iZoneEthernetInterface.pdf).
 
+## Troubleshooting / issue reports
+
+If Home Assistant can load the iZone integration, prefer **Download diagnostics**
+from the integration page.
+
+When that is not possible (or you need a live HTTP/UDP survey of the bridge),
+run the stdlib probe from a machine on the same LAN:
+
+```bash
+curl -fsSL -o izone_v1_probe.py \
+  https://raw.githubusercontent.com/Swamp-Ig/pizone/main/scripts/izone_v1_probe.py
+python3 izone_v1_probe.py <bridge-ip> --with-content-type > izone-v1-probe.log
+```
+
+Attach `izone-v1-probe.log` to the GitHub issue. Stop Home Assistant (or other
+listeners on UDP 7005) first if the UDP listen step fails to bind.
+
 ## Development
 
 1. Install [uv](https://docs.astral.sh/uv/).
