@@ -1024,7 +1024,6 @@ class Controller:
                 lock,
                 session.get(
                     f"http://{self.device_ip}/{resource}",
-                    headers={"Connection": "close"},
                     timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
                 ) as response,
             ):

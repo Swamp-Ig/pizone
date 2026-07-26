@@ -102,14 +102,14 @@ def _req(
     *,
     content_type: bool,
 ) -> tuple[int | None, str, float, str | None]:
-    data = None
-    headers: dict[str, str] = {"Connection": "close"}
-    if body is not None:
+    if body is None:
+        request = urllib.request.Request(url, method=method)
+    else:
         data = json.dumps(body).encode("latin_1")
-        headers["Content-Length"] = str(len(data))
+        headers = {"Content-Length": str(len(data))}
         if content_type:
             headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as resp:
