@@ -563,6 +563,54 @@ async def test_fault_placeholder_values_in_cache_use_defaults(
 
 # disposition: deprecate
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value", "prop"),
+    [
+        ("SysFan", "quiet", "fan"),
+        ("SysFan", "weird", "fan"),
+        ("SysMode", "quiet", "mode"),
+        ("SysMode", "turbo", "mode"),
+    ],
+)
+async def test_unknown_sys_enum_raises(
+    service: MockDiscoveryService,
+    field: str,
+    value: str,
+    prop: str,
+) -> None:
+    """Unknown non-fault SysFan/SysMode must not silently map to AUTO/COOL."""
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._system_settings[field] = value
+
+    with pytest.raises(ValueError):
+        getattr(controller, prop)
+
+
+# disposition: deprecate
+@pytest.mark.asyncio
+async def test_unknown_fan_auto_falls_back_to_unknown_list() -> None:
+    service = MockDiscoveryService()
+    controller = MockController(
+        service,
+        service._event_coordinator,
+        device_uid="000000099",
+        device_ip="10.0.0.99",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = deepcopy(controller.resources["SystemSettings"])
+    settings["FanAuto"] = "brand-new-speed-table"
+    controller.resources["SystemSettings"] = settings
+    service._controllers["000000099"] = controller
+
+    await controller._initialize(system_settings=settings)
+
+    assert controller.fan_modes == Controller._VALID_FAN_MODES["unknown"]
+    await service.close()
+
+
+# disposition: deprecate
+@pytest.mark.asyncio
 async def test_both_false_on_transport_failure(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
     controller._connected = False

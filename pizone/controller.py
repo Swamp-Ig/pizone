@@ -282,9 +282,10 @@ class Controller:
                 raise ConnectionError("SystemSettings device ID mismatch")
 
             if self._system_settings:
-                self.fan_modes = Controller._VALID_FAN_MODES[
-                    str(self._system_settings.get("FanAuto", "disabled"))
-                ]
+                fan_auto = str(self._system_settings.get("FanAuto", "disabled"))
+                self.fan_modes = Controller._VALID_FAN_MODES.get(
+                    fan_auto, Controller._VALID_FAN_MODES["unknown"]
+                )
             else:
                 self.fan_modes = Controller._VALID_FAN_MODES["disabled"]
 
@@ -479,13 +480,16 @@ class Controller:
 
     @property
     def mode(self) -> Mode:
-        """System mode (cooling, heating, etc.)."""
+        """System mode (cooling, heating, etc.).
+
+        Raises:
+            ValueError: If the cached SysMode is not a known :class:`Mode` member
+                (fault ``error`` is remapped by :meth:`_get_system_state`).
+
+        """
         if self.free_air:
             return self.Mode.FREE_AIR
-        try:
-            return self.Mode(self._get_system_state("SysMode"))
-        except ValueError:
-            return self.Mode.COOL
+        return self.Mode(self._get_system_state("SysMode"))
 
     async def set_mode(self, value: Mode) -> None:
         """Set the system mode (cooling, heating, etc.).
@@ -508,11 +512,14 @@ class Controller:
 
     @property
     def fan(self) -> Fan:
-        """The current fan level."""
-        try:
-            return self.Fan(self._get_system_state("SysFan"))
-        except ValueError:
-            return self.Fan.AUTO
+        """The current fan level.
+
+        Raises:
+            ValueError: If the cached SysFan is not a known :class:`Fan` member
+                (fault ``error`` is remapped by :meth:`_get_system_state`).
+
+        """
+        return self.Fan(self._get_system_state("SysFan"))
 
     async def set_fan(self, value: Fan) -> None:
         """Set the fan level.
