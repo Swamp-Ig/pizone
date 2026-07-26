@@ -673,6 +673,7 @@ class DiscoveryService:
     async def _probe(
         self, host: str
     ) -> tuple[ControllerEndpoint, dict[str, Any]] | None:
+        """HTTP GET /SystemSettings; None on transport or content-shaped failure."""
         session = self._session
         if session is None:
             return None
@@ -688,13 +689,17 @@ class DiscoveryService:
                     data = await response.json(content_type=None)
                 except json.JSONDecodeError:
                     text = await response.text()
-                    if len(text) >= 4 and text[-4:] == "{OK}":
-                        data = json.loads(text[:-4])
-                    else:
+                    if len(text) < 4 or text[-4:] != "{OK}":
                         return None
-        except TimeoutError, aiohttp.ClientError, OSError:
+                    try:
+                        data = json.loads(text[:-4])
+                    except json.JSONDecodeError:
+                        return None
+        except TimeoutError, aiohttp.ClientError, OSError, UnicodeDecodeError:
             return None
 
+        if not isinstance(data, dict):
+            return None
         uid = data.get("AirStreamDeviceUId")
         if not isinstance(uid, str) or not uid:
             return None

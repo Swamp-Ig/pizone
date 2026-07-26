@@ -4,6 +4,8 @@ import json
 from types import TracebackType
 from typing import Self
 
+_UNSET: object = object()
+
 
 class FakeHttpResponse:
     """Minimal async HTTP response double."""
@@ -13,8 +15,9 @@ class FakeHttpResponse:
         status: int,
         body: str = "",
         *,
-        json_data: dict[str, object] | None = None,
+        json_data: object = _UNSET,
         json_error: bool = False,
+        unicode_error: bool = False,
     ) -> None:
         self.status = status
         self.reason = (
@@ -27,17 +30,22 @@ class FakeHttpResponse:
         self._body = body
         self._json_data = json_data
         self._json_error = json_error
+        self._unicode_error = unicode_error
 
-    async def json(self, content_type: str | None = None) -> dict[str, object]:
+    async def json(self, content_type: str | None = None) -> object:
         del content_type
+        if self._unicode_error:
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
         if self._json_error:
             raise json.JSONDecodeError("invalid", self._body, 0)
-        if self._json_data is not None:
+        if self._json_data is not _UNSET:
             return self._json_data
         return json.loads(self._body)
 
     async def text(self, encoding: str | None = None) -> str:
         del encoding
+        if self._unicode_error:
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
         return self._body
 
     async def __aenter__(self) -> Self:

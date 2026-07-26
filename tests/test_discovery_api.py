@@ -254,6 +254,69 @@ async def test_discover_by_host_unreachable() -> None:
 
 # disposition: 1.4
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(
+            FakeHttpResponse(200, "<html>not a bridge</html>", json_error=True),
+            id="html",
+        ),
+        pytest.param(
+            FakeHttpResponse(200, json_data={"SysOn": "on"}),
+            id="json-missing-uid",
+        ),
+        pytest.param(
+            FakeHttpResponse(200, json_data=None),
+            id="empty-null-body",
+        ),
+        pytest.param(
+            FakeHttpResponse(200, json_data=["not", "an", "object"]),
+            id="json-array",
+        ),
+        pytest.param(
+            FakeHttpResponse(200, json_data="not-an-object"),
+            id="json-string",
+        ),
+        pytest.param(
+            FakeHttpResponse(200, "garbage{OK}", json_error=True),
+            id="ok-suffix-non-json",
+        ),
+        pytest.param(
+            FakeHttpResponse(200, unicode_error=True),
+            id="non-utf8",
+        ),
+    ],
+)
+async def test_discover_by_host_malformed_body_returns_none(
+    response: FakeHttpResponse,
+) -> None:
+    """Manual host widens _probe input; content failures must not raise."""
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(ClientSession, FakeHttpSession(get_response=response))
+    endpoint = await service.discover_by_host("10.0.0.90")
+    assert endpoint is None
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_discover_by_host_ok_suffix_json() -> None:
+    """Bridge quirk: JSON body with a trailing {OK} still probes successfully."""
+    body = '{"AirStreamDeviceUId":"000025841","SysOn":"on"}{OK}'
+    service = MockDiscoveryService(legacy_pathway=False)
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(
+            get_response=FakeHttpResponse(200, body, json_error=True),
+        ),
+    )
+    endpoint = await service.discover_by_host("10.0.0.90")
+    assert endpoint == ControllerEndpoint(uid="000025841", host="10.0.0.90")
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
 async def test_discover_by_host_uses_known_cache() -> None:
     service = MockDiscoveryService(legacy_pathway=False)
     service._session = cast(
