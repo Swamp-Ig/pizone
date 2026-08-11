@@ -659,15 +659,61 @@ class Controller:
 
     @property
     def zone_ctrl(self) -> int:
-        """Zone that currently controls the AC unit.
+        """Zone index that currently controls the AC unit.
 
         Value is interpreted in combination with :attr:`ras_mode`.
+        See :attr:`control_setpoint_owner` for the controller or zone that
+        owns the unit target.
 
         Raises:
             TypeError: If the cached value is missing or not numeric.
 
         """
         return int(self._get_system_state("CtrlZone"))
+
+    @property
+    def control_setpoint_owner(self) -> Self | Zone | None:
+        """Controller or zone that currently owns the unit setpoint.
+
+        Returns this controller when RAS mode is ``RAS``, when RAS mode is
+        ``master`` and :attr:`zone_ctrl` is past :attr:`zones_total` (the
+        indoor unit itself), or when any AUTO zone has no room sensor.
+        Otherwise the zone matching :attr:`zone_ctrl`, or ``None`` if that
+        index does not match a zone.
+
+        CONST/OPCL zones never have a room sensor; only a missing AUTO CTS
+        forces unit control.
+        """
+        if (
+            self.ras_mode == "RAS"
+            or (self.ras_mode == "master" and self.zone_ctrl > self.zones_total)
+            or any(
+                zone.type is Zone.Type.AUTO and zone.temp_current is None
+                for zone in self.zones
+            )
+        ):
+            return self
+        return next(
+            (zone for zone in self.zones if zone.index == self.zone_ctrl),
+            None,
+        )
+
+    @property
+    def control_setpoint(self) -> float | None:
+        """Setpoint of whoever currently owns the unit target.
+
+        :attr:`temp_setpoint` when the controller owns the unit target,
+        otherwise the controlling AUTO zone's setpoint. ``None`` when there
+        is no matching zone or that zone is not AUTO.
+        """
+        owner = self.control_setpoint_owner
+        if owner is None:
+            return None
+        if not isinstance(owner, Zone):
+            return self.temp_setpoint
+        if owner.type is not Zone.Type.AUTO:
+            return None
+        return owner.temp_setpoint
 
     @property
     def zones_total(self) -> int:
