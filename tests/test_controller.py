@@ -48,6 +48,25 @@ def _fault_system_settings(device_uid: str) -> dict[str, object]:
     return settings
 
 
+def _zero_zone_system_settings(device_uid: str) -> dict[str, object]:
+    settings = deepcopy(SYSTEMS["000000001"]["SystemSettings"])
+    settings.update(
+        {
+            "AirStreamDeviceUId": device_uid,
+            "SysOn": "off",
+            "SysMode": "cool",
+            "SysFan": "low",
+            "Setpoint": "22.0",
+            "RAS": "RAS",
+            "CtrlZone": 15,
+            "NoOfConst": 0,
+            "NoOfZones": 0,
+            "FanAuto": "disabled",
+        }
+    )
+    return settings
+
+
 # disposition: deprecate
 @pytest.mark.asyncio
 async def test_controller_property_reads(service: MockDiscoveryService) -> None:
@@ -377,6 +396,66 @@ async def test_v2_probe_clears_is_v2_on_http_error() -> None:
         controller = cast(MockController, svc._controllers["000000001"])
 
         assert controller.is_v2 is False
+    finally:
+        await svc.close()
+
+
+# disposition: deprecate
+@pytest.mark.asyncio
+async def test_zero_zone_system_initializes_controller() -> None:
+    svc = MockDiscoveryService()
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000004",
+        device_ip="10.0.0.4",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = _zero_zone_system_settings(controller.device_uid)
+    controller.resources["SystemSettings"] = settings
+    svc._controllers[controller.device_uid] = controller
+
+    try:
+        await controller._initialize()
+
+        assert controller.bridge_connected is True
+        assert controller.connected is True
+        assert controller.dump_state()["system_settings"] == settings
+        assert controller.is_on is False
+        assert controller.mode == Controller.Mode.COOL
+        assert controller.fan == Controller.Fan.LOW
+        assert controller.temp_setpoint == pytest.approx(22.0)
+        assert controller.zones_total == 0
+        assert controller.zones == []
+    finally:
+        await svc.close()
+
+
+# disposition: deprecate
+@pytest.mark.asyncio
+async def test_negative_zone_count_marks_izone_not_ok() -> None:
+    svc = MockDiscoveryService()
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000000004",
+        device_ip="10.0.0.4",
+        is_v2=False,
+        is_ipower=False,
+    )
+    settings = _zero_zone_system_settings(controller.device_uid)
+    settings["NoOfZones"] = -1
+    controller.resources["SystemSettings"] = settings
+    svc._controllers[controller.device_uid] = controller
+
+    try:
+        await controller._initialize()
+
+        assert controller.bridge_connected is True
+        assert controller.connected is False
+        assert controller.dump_state()["system_settings"] == {}
+        assert controller.zones == []
     finally:
         await svc.close()
 
