@@ -38,6 +38,7 @@ def _system_settings(uid: str) -> dict[str, object]:
         "SysOn": "on",
         "SysMode": "heat",
         "SysFan": "auto",
+        "RAS": "RAS",
         "NoOfZones": 0,
         "FanAuto": "disabled",
     }
@@ -708,6 +709,12 @@ async def test_create_controller_success() -> None:
     controller = await service.create_controller("000025841", "10.0.0.90")
     assert controller.device_uid == "000025841"
     assert controller.device_ip == "10.0.0.90"
+    assert controller.bridge_connected is True
+    assert controller.connected is True
+    assert controller.is_on is True
+    assert controller.mode == Controller.Mode.HEAT
+    assert controller.fan == Controller.Fan.AUTO
+    assert controller.zones == []
     assert service._claimed_endpoints["000025841"] == ControllerEndpoint(
         uid="000025841", host="10.0.0.90"
     )
