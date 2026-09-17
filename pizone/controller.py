@@ -928,9 +928,9 @@ class Controller:
 
     @staticmethod
     def _system_settings_valid(values: ControllerData) -> bool:
-        """Return whether *values* look like healthy AC subsystem data."""
+        """Return whether *values* look healthy; unit-only systems have zero zones."""
         return (
-            int(values["NoOfZones"]) > 0
+            int(values["NoOfZones"]) >= 0
             and str(values["SysFan"]) != "error"
             and str(values["RAS"]) != "error"
         )
