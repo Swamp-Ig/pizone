@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from pizone import Controller, Listener
+from pizone import Controller, Listener, Zone, v2 as v2_mod
 
 from .conftest import MockController, MockDiscoveryService, _register_mock_service
 from .power_data import POWER_CONFIG
@@ -22,6 +22,7 @@ from .resources import (
     FAULT_SYSTEM_SETTINGS_PAIRED_COLD_RESTART,
     SYSTEMS,
 )
+from .v2_fixtures import SAMPLE_SYSTEM_V2, SAMPLE_ZONES_V2
 
 
 class _DisconnectListener(Listener):
@@ -366,7 +367,7 @@ async def test_v2_probe_sets_is_v2_when_systemv2_returned() -> None:
     ) -> MockController:
         controller = original_create(device_uid, device_ip, is_v2, is_ipower)
         controller.v2_probe_response = (
-            '{"AirStreamDeviceUId":"000000001","SystemV2":{"SysOn":"on"}}'
+            '{"AirStreamDeviceUId":"000000001","SystemV2":{"SysOn":1,"NoOfZones":0}}'
         )
         return controller
 
@@ -877,3 +878,157 @@ async def test_legacy_set_still_wakes_poll(service: MockDiscoveryService) -> Non
     await controller.set_on(False)
 
     refresh.assert_awaited()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_refresh_sequential_zones_keeps_battery() -> None:
+    """V2 path uses sequential Type=2 (no gather — bridge queues concurrent waits)."""
+    svc = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000025841",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._read_api = "v2"
+    controller._is_v2 = True
+    controller._v2_use_content_type = False
+    controller.v2_system = SAMPLE_SYSTEM_V2
+    controller.v2_zones = SAMPLE_ZONES_V2
+    settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
+    svc._controllers["000025841"] = controller
+    await controller._initialize(system_settings=settings)
+
+    assert controller.is_v2 is True
+    assert controller._read_api == "v2"
+    assert controller.zones[0].dump_state()["BattVolt"] == 310
+
+    controller.sent.clear()
+    controller.v2_zones = {
+        0: {
+            **SAMPLE_ZONES_V2[0],
+            "ZonesV2": {**SAMPLE_ZONES_V2[0]["ZonesV2"], "BattVolt": 280},
+        },
+        1: SAMPLE_ZONES_V2[1],
+    }
+    await controller.refresh_zones()
+    assert controller.zones[0].dump_state()["BattVolt"] == 280
+
+    zone_posts = [
+        item
+        for item in controller.sent
+        if item[0] == "iZoneRequestV2" and item[1]["iZoneV2Request"]["Type"] == 2
+    ]
+    assert [p[1]["iZoneV2Request"]["No"] for p in zone_posts] == [0, 1]
+    await svc.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_system_commands_use_izone_command_v2() -> None:
+    svc = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000025841",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._read_api = "v2"
+    controller._is_v2 = True
+    controller._v2_use_content_type = False
+    controller.v2_system = SAMPLE_SYSTEM_V2
+    controller.v2_zones = SAMPLE_ZONES_V2
+    settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
+    svc._controllers["000025841"] = controller
+    await controller._initialize(system_settings=settings)
+    controller.sent.clear()
+
+    await controller.set_on(True)
+    await controller.set_mode(Controller.Mode.COOL)
+    await controller.set_fan(Controller.Fan.AUTO)
+    await controller.set_temp_setpoint(22.5)
+
+    commands = [item for item in controller.sent if item[0] == "iZoneCommandV2"]
+    assert {"SysOn": 1} in [c[1] for c in commands]
+    assert {"SysMode": 1} in [c[1] for c in commands]
+    assert {"SysFan": 4} in [c[1] for c in commands]
+    assert {"SysSetpoint": 2250} in [c[1] for c in commands]
+    assert not any(cmd == "SystemON" for cmd, _ in controller.sent)
+    await svc.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_zone_commands_confirm_with_type2() -> None:
+    svc = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000025841",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._read_api = "v2"
+    controller._is_v2 = True
+    controller._v2_use_content_type = False
+    controller.v2_system = SAMPLE_SYSTEM_V2
+    controller.v2_zones = SAMPLE_ZONES_V2
+    settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
+    svc._controllers["000025841"] = controller
+    await controller._initialize(system_settings=settings)
+    controller.sent.clear()
+
+    await controller.zones[0].set_temp_setpoint(22.0)
+    await controller.zones[0].set_mode(Zone.Mode.CLOSE)
+    await controller.zones[0].set_airflow_min(20)
+
+    assert ("iZoneCommandV2", {"ZoneSetpoint": {"Index": 0, "Setpoint": 2200}}) in (
+        controller.sent
+    )
+    assert ("iZoneCommandV2", {"ZoneMode": {"Index": 0, "Mode": 2}}) in controller.sent
+    assert ("iZoneCommandV2", {"ZoneMinAir": {"Index": 0, "MinAir": 20}}) in (
+        controller.sent
+    )
+    confirm = [
+        item
+        for item in controller.sent
+        if item[0] == "iZoneRequestV2" and item[1]["iZoneV2Request"]["Type"] == 2
+    ]
+    assert all(item[1]["iZoneV2Request"]["No"] == 0 for item in confirm)
+    assert len(confirm) >= 3
+    assert not any(cmd == "ZoneCommand" for cmd, _ in controller.sent)
+    await svc.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_free_air_still_uses_v1_endpoint() -> None:
+    svc = MockDiscoveryService(legacy_pathway=False)
+    controller = MockController.from_discovery(
+        svc,
+        svc._event_coordinator,
+        device_uid="000025841",
+        device_ip="10.0.0.90",
+        is_v2=False,
+        is_ipower=False,
+    )
+    controller._read_api = "v2"
+    controller._is_v2 = True
+    controller.v2_system = SAMPLE_SYSTEM_V2
+    controller.v2_zones = SAMPLE_ZONES_V2
+    settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
+    # FreeAir must be available for the setter path.
+    settings["FreeAir"] = "off"
+    svc._controllers["000025841"] = controller
+    await controller._initialize(system_settings=settings)
+    controller.sent.clear()
+
+    await controller.set_free_air(True)
+    assert ("FreeAir", {"FreeAir": "on"}) in controller.sent
+    await svc.close()

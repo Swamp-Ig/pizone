@@ -1,5 +1,6 @@
 """Fake aiohttp session/response objects for controller HTTP tests."""
 
+from collections.abc import Callable
 import json
 from types import TracebackType
 from typing import Self
@@ -48,6 +49,13 @@ class FakeHttpResponse:
             raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
         return self._body
 
+    async def read(self) -> bytes:
+        if self._unicode_error:
+            return b"\xff"
+        if self._json_data is not _UNSET:
+            return json.dumps(self._json_data).encode("utf-8")
+        return self._body.encode("utf-8")
+
     async def __aenter__(self) -> Self:
         return self
 
@@ -68,7 +76,9 @@ class FakeHttpSession:
         response: FakeHttpResponse | None = None,
         *,
         get_response: FakeHttpResponse | None = None,
-        post_response: FakeHttpResponse | None = None,
+        post_response: FakeHttpResponse
+        | Callable[..., FakeHttpResponse]
+        | None = None,
         get_error: Exception | None = None,
         post_error: Exception | None = None,
     ) -> None:
@@ -78,6 +88,7 @@ class FakeHttpSession:
         self._post_error = post_error
         self.get_calls = 0
         self.post_calls = 0
+        self.last_post_kwargs: dict[str, object] = {}
 
     def get(self, *_args: object, **_kwargs: object) -> FakeHttpResponse:
         self.get_calls += 1
@@ -88,9 +99,14 @@ class FakeHttpSession:
 
     def post(self, *_args: object, **_kwargs: object) -> FakeHttpResponse:
         self.post_calls += 1
+        self.last_post_kwargs = _kwargs
         if self._post_error is not None:
             raise self._post_error
-        assert self._post_response is not None
+        if self._post_response is None:
+            # V2 absent — discovery falls through to V1 GET.
+            return FakeHttpResponse(200, body="{ERROR}")
+        if callable(self._post_response):
+            return self._post_response(*_args, **_kwargs)
         return self._post_response
 
     async def close(self) -> None:

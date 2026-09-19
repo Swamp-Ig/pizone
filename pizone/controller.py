@@ -8,14 +8,14 @@ from enum import Enum
 from functools import wraps
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 import aiohttp
 
-from . import power as power_mod
+from . import power as power_mod, v2 as v2_mod
 from .exceptions import ControllerCommandError, ResponseDecodeError
 from .power import Power
-from .types import ControllerEndpoint
+from .types import ControllerEndpoint, ControllerProbe
 from .zone import Zone
 
 if TYPE_CHECKING:
@@ -145,6 +145,10 @@ class Controller:
         self._device_uid = device_uid
         self._is_v2 = is_v2
         self._is_ipower = is_ipower
+        # Reads stay V1 until 1.4 create sets this from a useful SystemV2 probe.
+        # UDP ``iZoneV2`` alone must not flip the read path.
+        self._read_api: Literal["v1", "v2"] = "v1"
+        self._v2_use_content_type: bool | None = None
 
         self.zones: list[Zone] = []
         self.fan_modes: list[Controller.Fan] = []
@@ -238,8 +242,7 @@ class Controller:
         discovery_service: DiscoveryService,
         event_coordinator: Listener,
         *,
-        endpoint: ControllerEndpoint,
-        system_settings: Controller.ControllerData,
+        probe: ControllerProbe,
         on_address_changed: Callable[[ControllerEndpoint], None] | None = None,
     ) -> Self:
         """Create and initialize a controller from an HTTP probe result.
@@ -248,16 +251,21 @@ class Controller:
         service from :func:`~pizone.discovery.create_discovery` rather than
         calling this from application code.
         """
+        endpoint = probe.endpoint
         controller = cls(
             discovery_service,
             event_coordinator,
             device_uid=endpoint.uid,
             device_ip=endpoint.host,
-            is_v2=False,
+            is_v2=probe.read_api == "v2",
             is_ipower=power_mod.ENABLE_POWER,
         )
         controller._on_address_changed = on_address_changed
-        await controller._initialize(system_settings=system_settings)
+        controller._read_api = probe.read_api
+        controller._v2_use_content_type = probe.v2_use_content_type
+        await controller._initialize(
+            system_settings=cast(Controller.ControllerData, probe.system_settings)
+        )
         return controller
 
     async def _initialize(
@@ -289,7 +297,9 @@ class Controller:
             else:
                 self.fan_modes = Controller._VALID_FAN_MODES["disabled"]
 
-            await self._probe_v2_api()
+            # 1.4 create already chose read_api; legacy still soft-probes V2.
+            if system_settings is None:
+                await self._probe_v2_api()
 
             zone_count = int(settings["NoOfZones"])
             self.zones = [Zone(self, i) for i in range(zone_count)]
@@ -309,15 +319,25 @@ class Controller:
             self._discovery_service.create_task(self._poll_loop())
 
     async def _probe_v2_api(self) -> None:
-        """Detect V2 API support; non-fatal on failure."""
+        """Legacy-path V2 capability probe; non-fatal on failure.
+
+        The 1.4 create path sets :attr:`is_v2` / ``_read_api`` from connect and
+        does not call this method.
+        """
         try:
             response = await self._http_post(
                 "iZoneRequestV2",
                 {"iZoneV2Request": {"Type": 1, "No": 0, "No1": 0}},
             )
             data = json.loads(response)
-            uid = data["AirStreamDeviceUId"]
-            self._is_v2 = uid == self._device_uid and "SystemV2" in data
+            if (
+                isinstance(data, dict)
+                and data.get("AirStreamDeviceUId") == self._device_uid
+                and v2_mod.system_v2_useful(data)
+            ):
+                self._is_v2 = True
+            else:
+                self._is_v2 = False
         except ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError:
             self._is_v2 = False
 
@@ -775,12 +795,53 @@ class Controller:
             raise first_other
 
     async def _fetch_system(self, notify: bool = True) -> ControllerData | None:
-        """Fetch SystemSettings and apply to cache (no refresh scope)."""
+        """Fetch system settings and apply to cache (no refresh scope)."""
+        if self._read_api == "v2":
+            async with self._sending_lock:
+                return await self._fetch_system_v2_unlocked(notify=notify)
         values: Controller.ControllerData = await self._request_get("SystemSettings")
         return self._apply_system_settings(values, notify=notify)
 
+    async def _fetch_system_v2_unlocked(
+        self, notify: bool = True
+    ) -> ControllerData | None:
+        """Fetch SystemV2 and apply. Caller must hold ``_sending_lock``."""
+        data = await self._v2_request(1, 0)
+        if data is None or not v2_mod.system_v2_useful(data):
+            raise ConnectionError("Unable to refresh system via V2")
+        uid = cast(str, data["AirStreamDeviceUId"])
+        if uid != self._device_uid:
+            _LOG.error("_fetch_system_v2 called with non-matching device ID")
+            return None
+        values = v2_mod.system_v2_to_settings(
+            cast(dict[str, Any], data["SystemV2"]), uid
+        )
+        return self._apply_system_settings(values, notify=notify)
+
+    async def _v2_request(self, req_type: int, no: int = 0) -> dict[str, Any] | None:
+        """POST iZoneRequestV2 using the cached Content-Type mode."""
+        session = self._discovery_service.session
+        if session is None:
+            raise ConnectionError("Discovery service is not started")
+        try:
+            parsed, mode = await v2_mod.request_v2(
+                session,
+                self.device_ip,
+                req_type=req_type,
+                no=no,
+                use_content_type=self._v2_use_content_type,
+                timeout=Controller.REQUEST_TIMEOUT,
+            )
+        except (TimeoutError, aiohttp.ClientError, OSError) as ex:
+            raise ConnectionError("Unable to connect to the controller") from ex
+        if mode is not None and self._v2_use_content_type is None:
+            self._v2_use_content_type = mode
+        return parsed
+
     async def _fetch_zone_group(self, group: int, notify: bool = True) -> None:
         """Fetch one zone group and update cache (no refresh scope)."""
+        if self._read_api == "v2":
+            raise RuntimeError("V2 path uses per-zone Type=2 fetches, not zone groups")
         if group not in (0, 4, 8, 12):
             raise ValueError(f"Unsupported zone group start index {group}")
 
@@ -792,13 +853,37 @@ class Controller:
             self.zones[i + group]._update_zone(zone_data, notify)  # noqa: SLF001
 
     async def _fetch_zones(self, notify: bool = True) -> None:
-        """Fetch all zone groups with overlapped GETs (no refresh scope)."""
+        """Fetch all zones (no refresh scope).
+
+        V1 uses overlapped group GETs. V2 uses sequential Type=2 POSTs (local
+        bridges queue concurrent waits; sequential is faster and avoids storms).
+        """
         zones = len(self.zones)
         if zones == 0:
+            return
+        if self._read_api == "v2":
+            async with self._sending_lock:
+                await self._fetch_zones_v2_unlocked(notify=notify)
             return
         await self._gather_refresh(
             *[self._fetch_zone_group(i, notify) for i in range(0, zones, 4)]
         )
+
+    async def _fetch_zones_v2_unlocked(self, notify: bool = True) -> None:
+        """Sequential ZonesV2 Type=2. Caller must hold ``_sending_lock``."""
+        for index, zone in enumerate(self.zones):
+            data = await self._v2_request(2, index)
+            if data is None or not v2_mod.zones_v2_useful(data, index=index):
+                _LOG.debug(
+                    "V2 zone refresh miss uid=%s index=%s; retaining cache",
+                    self._device_uid,
+                    index,
+                )
+                continue
+            zone_data = v2_mod.zones_v2_to_zone_data(
+                cast(dict[str, Any], data["ZonesV2"])
+            )
+            zone._update_zone(zone_data, notify)  # noqa: SLF001
 
     async def _fetch_power(self, notify: bool = True) -> None:
         """Fetch power monitor status when enabled (no refresh scope).
@@ -818,7 +903,14 @@ class Controller:
             self._event_coordinator.power_update(self)
 
     async def _fetch_all(self, notify: bool = True) -> None:
-        """Overlapped system + zones [+ power] fetch (no refresh scope)."""
+        """System + zones [+ power] fetch (no refresh scope)."""
+        if self._read_api == "v2":
+            # Sequential under one lock: V2 zone gather is slower on typical bridges.
+            async with self._sending_lock:
+                await self._fetch_system_v2_unlocked(notify)
+                await self._fetch_zones_v2_unlocked(notify)
+            await self._fetch_power(notify)
+            return
         zones = len(self.zones)
         coros: list[Awaitable[Any]] = [self._fetch_system(notify)]
         if power_mod.ENABLE_POWER and self._power is not None and self._power.enabled:
@@ -829,12 +921,12 @@ class Controller:
 
     @_refresh_api
     async def refresh_system(self) -> None:
-        """Refresh system settings from the device via V1 HTTP."""
+        """Refresh system settings from the device."""
         await self._fetch_system(notify=True)
 
     @_refresh_api
     async def refresh_zones(self) -> None:
-        """Refresh all zones from the device via V1 HTTP."""
+        """Refresh all zones from the device."""
         await self._fetch_zones(notify=True)
 
     @_refresh_api
@@ -844,7 +936,7 @@ class Controller:
 
     @_refresh_api
     async def refresh_all(self) -> None:
-        """Refresh system, zones, and power (if enabled) via overlapping V1 GETs."""
+        """Refresh system, zones, and power (if enabled)."""
         await self._fetch_all(notify=True)
 
     # disposition: deprecate — prefer public refresh_*; used by legacy poll
@@ -971,23 +1063,81 @@ class Controller:
             return
 
         async with self._sending_lock, self._refresh_scope():
-            await self._http_post(command, {command: send})
-            self._system_settings[state] = value
-            self._event_coordinator.controller_update(self)
-            await self._fetch_system(notify=True)
+            if self._read_api == "v2":
+                v2_payload = v2_mod.system_command_to_v2(state, value, send)
+                if v2_payload is not None:
+                    await self._http_command_v2(v2_payload)
+                else:
+                    await self._http_post(command, {command: send})
+                self._system_settings[state] = value
+                self._event_coordinator.controller_update(self)
+                await self._fetch_system_v2_unlocked(notify=True)
+            else:
+                await self._http_post(command, {command: send})
+                self._system_settings[state] = value
+                self._event_coordinator.controller_update(self)
+                await self._fetch_system(notify=True)
 
     async def _execute_zone_command(
         self, command: str, data: dict[str, Any], zone_index: int
     ) -> None:
-        """POST a zone command; on 1.4 path confirm with that zone group's GET."""
+        """POST a zone command; on 1.4 path confirm with a zone refresh."""
         if self._legacy_pathway:
             await self._send_command_async(command, data)
             return
 
-        group = (zone_index // 4) * 4
         async with self._sending_lock, self._refresh_scope():
-            await self._http_post(command, data)
-            await self._fetch_zone_group(group, notify=True)
+            if self._read_api == "v2":
+                await self._http_command_v2(
+                    v2_mod.zone_command_to_v2(command, data, zone_index)
+                )
+                await self._fetch_zone_v2_unlocked(zone_index, notify=True)
+            else:
+                group = (zone_index // 4) * 4
+                await self._http_post(command, data)
+                await self._fetch_zone_group(group, notify=True)
+
+    async def _fetch_zone_v2_unlocked(
+        self, index: int, notify: bool = True
+    ) -> None:
+        """Refresh one zone via Type=2. Caller must hold ``_sending_lock``."""
+        if index < 0 or index >= len(self.zones):
+            return
+        data = await self._v2_request(2, index)
+        if data is None or not v2_mod.zones_v2_useful(data, index=index):
+            _LOG.debug(
+                "V2 zone confirm miss uid=%s index=%s; retaining cache",
+                self._device_uid,
+                index,
+            )
+            return
+        zone_data = v2_mod.zones_v2_to_zone_data(
+            cast(dict[str, Any], data["ZonesV2"])
+        )
+        self.zones[index]._update_zone(zone_data, notify)  # noqa: SLF001
+
+    async def _http_command_v2(self, payload: dict[str, Any]) -> str:
+        """POST iZoneCommandV2 using the cached Content-Type mode."""
+        session = self._discovery_service.session
+        if session is None:
+            raise ConnectionError("Discovery service is not started")
+        try:
+            body, mode = await v2_mod.command_v2(
+                session,
+                self.device_ip,
+                payload,
+                use_content_type=self._v2_use_content_type,
+                timeout=Controller.REQUEST_TIMEOUT,
+            )
+        except (TimeoutError, aiohttp.ClientError, OSError) as ex:
+            raise ConnectionError("Unable to connect to the controller") from ex
+        if mode is not None and self._v2_use_content_type is None:
+            self._v2_use_content_type = mode
+        if body.strip().startswith("{ERROR"):
+            raise ControllerCommandError(f"Server returned error state {body}")
+        if body.endswith("{OK}"):
+            body = body[:-4]
+        return body
 
     def _set_bridge_ok(self, ok: bool, ex: Exception | None = None) -> None:
         was_connected = self.connected
@@ -1077,10 +1227,11 @@ class Controller:
                     raise ControllerCommandError(
                         f"HTTP {response.status} for http://{self.device_ip}/{resource}"
                     )
+                raw = await response.read()
+                text = v2_mod.decode_device_body(raw)
                 try:
-                    return await response.json(content_type=None)
+                    return json.loads(text)
                 except json.JSONDecodeError as ex:
-                    text = await response.text()
                     if text[-4:] == "{OK}":
                         return json.loads(text[:-4])
                     _LOG.error('Decode error for "%s"', text, exc_info=True)
@@ -1106,7 +1257,7 @@ class Controller:
         session = self._discovery_service.session
         if session is None:
             raise ConnectionError("Discovery service is not started")
-        body = json.dumps(data).encode("latin_1")
+        body = json.dumps(data).encode("utf-8")
         lock = self._sending_lock if self._legacy_pathway else nullcontext()
         try:
             async with (
@@ -1126,7 +1277,7 @@ class Controller:
                         f"Unable to connect to: http://{self.device_ip}/{command}"
                         f" response={response.status} message={response.reason}"
                     )
-                result = await response.text(encoding="latin_1")
+                result = v2_mod.decode_device_body(await response.read())
         except (TimeoutError, aiohttp.ClientError) as ex:
             raise ConnectionError("Unable to connect to the controller") from ex
 
