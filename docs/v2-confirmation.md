@@ -27,10 +27,13 @@ setpoint write. These changes should be reviewed together before release.
 
 ## Type=7 bulk-read assessment
 
-A separate local adapter on one V2-only bridge has successfully read
-`iZoneStatusV2.Zones` using Type=7. That is useful evidence, not a guarantee of
-support across all firmware. The native branch currently has Type=1/2 fixtures,
-and Type=7 may omit metadata available in a full Type=2 zone document.
+The official [API header v1.41](https://developer.izone.com.au/downloads/iZone_JSON_datastrings.h)
+documents request Type=7 as system status. A separate local adapter on one
+V2-only bridge has successfully read `iZoneStatusV2.Zones` with that request.
+This is a documented endpoint with single-installation read evidence, not a
+guarantee of support across all firmware. The native branch currently has
+Type=1/2 fixtures. Type=7 carries dynamic zone fields but does not replace
+the full Type=2 metadata, such as zone names and types.
 
 This PR therefore does not silently switch polling to Type=7. A later bulk-read
 implementation should have all of the following acceptance cases:
@@ -48,3 +51,21 @@ implementation should have all of the following acceptance cases:
 
 The lower-risk immediate improvement is command interleaving between Type=2
 reads plus bounded read-only confirmation. It needs no new firmware assumption.
+
+## Documentation boundaries
+
+The [zone reference](https://developer.izone.com.au/docs/reference/zone/)
+defines mode selection separately from setpoint updates, supporting the
+mode-only AUTO contribution. Neither this page nor the Postman examples
+specifies a guaranteed acknowledgement or mechanical damper latency. The
+confirmation timings above remain measured/tested implementation choices.
+
+The [cloud event service](https://developer.izone.com.au/docs/getting-started/cloud/event/)
+is a separate vendor-arranged service, not a documented local WebSocket API
+that this library can enable for instant zone updates. Existing local UDP
+change notifications should not be confused with cloud event subscriptions.
+
+The [discovery guide](https://developer.izone.com.au/docs/getting-started/local/discovery/)
+says V2 devices retain V1 support, but issue #35 and the tested V2-only bridge
+contradict that assumption. Keep usable-response probing and actual V2 writes;
+an HTTP 200 response with an empty V1 body is not proof of V1 compatibility.
