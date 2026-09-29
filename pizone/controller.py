@@ -873,13 +873,10 @@ class Controller:
         """Sequential ZonesV2 Type=2. Caller must hold ``_sending_lock``."""
         for index, zone in enumerate(self.zones):
             data = await self._v2_request(2, index)
-            if data is None or not v2_mod.zones_v2_useful(data, index=index):
-                _LOG.debug(
-                    "V2 zone refresh miss uid=%s index=%s; retaining cache",
-                    self._device_uid,
-                    index,
-                )
-                continue
+            if data is None or not v2_mod.zones_v2_useful(
+                data, index=index, uid=self._device_uid
+            ):
+                raise ConnectionError(f"Invalid V2 zone response for index {index}")
             zone_data = v2_mod.zones_v2_to_zone_data(
                 cast(dict[str, Any], data["ZonesV2"])
             )
@@ -1104,13 +1101,10 @@ class Controller:
         if index < 0 or index >= len(self.zones):
             return
         data = await self._v2_request(2, index)
-        if data is None or not v2_mod.zones_v2_useful(data, index=index):
-            _LOG.debug(
-                "V2 zone confirm miss uid=%s index=%s; retaining cache",
-                self._device_uid,
-                index,
-            )
-            return
+        if data is None or not v2_mod.zones_v2_useful(
+            data, index=index, uid=self._device_uid
+        ):
+            raise ConnectionError(f"Invalid V2 zone response for index {index}")
         zone_data = v2_mod.zones_v2_to_zone_data(
             cast(dict[str, Any], data["ZonesV2"])
         )
