@@ -9,6 +9,7 @@ import asyncio
 from enum import IntEnum
 import json
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -178,16 +179,55 @@ def system_v2_useful(data: dict[str, Any]) -> bool:
     return "SysOn" in system and "NoOfZones" in system
 
 
-def zones_v2_useful(data: dict[str, Any], *, index: int | None = None) -> bool:
-    """Return whether a Type=2 response carries usable ZonesV2."""
+def _finite_temperature(value: Any) -> bool:
+    """Check a temperature without accepting booleans or non-finite values."""
+    if isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except TypeError, ValueError, OverflowError:
+        return False
+
+
+def zones_v2_useful(
+    data: dict[str, Any], *, index: int | None = None, uid: str | None = None
+) -> bool:
+    """Validate a complete Type=2 snapshot before replacing cached zone state."""
+    if uid is not None and data.get("AirStreamDeviceUId") != uid:
+        return False
     zone = data.get("ZonesV2")
     if not isinstance(zone, dict):
         return False
-    if "Index" not in zone:
+    required = {
+        "Index",
+        "Name",
+        "ZoneType",
+        "Mode",
+        "Setpoint",
+        "Temp",
+        "MaxAir",
+        "MinAir",
+    }
+    if not required.issubset(zone) or not isinstance(zone["Name"], str):
         return False
-    if index is not None and int(zone["Index"]) != index:
+    # Wire integers must not silently truncate fractions or accept JSON booleans.
+    for field in (
+        "Index",
+        "ZoneType",
+        "Mode",
+        "MaxAir",
+        "MinAir",
+        "Const",
+        "ConstA",
+        "Master",
+    ):
+        if field in zone and type(zone[field]) is not int:
+            return False
+    if zone["Index"] < 0 or (index is not None and zone["Index"] != index):
         return False
-    return True
+    if not all(0 <= zone[field] <= 100 for field in ("MaxAir", "MinAir")):
+        return False
+    return all(_finite_temperature(zone[field]) for field in ("Setpoint", "Temp"))
 
 
 def system_v2_to_settings(
@@ -299,7 +339,7 @@ def zones_v2_to_zone_data(zone_v2: dict[str, Any]) -> dict[str, str | int | floa
         "Mode": mode,
         "SetPoint": temp_from_wire(zone_v2.get("Setpoint")),
         "Temp": temp_from_wire(zone_v2.get("Temp")),
-        "MaxAir": int(zone_v2.get("MaxAir") or 100),
+        "MaxAir": int(zone_v2.get("MaxAir", 100)),
         "MinAir": int(zone_v2.get("MinAir") or 0),
         "Const": int(zone_v2.get("Const") or 0),
         "ConstA": int(zone_v2.get("ConstA") or 0),
