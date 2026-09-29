@@ -36,17 +36,19 @@ def decode_device_body(raw: bytes) -> str:
 
 
 # RAS / FanAuto have no matching library Enum — keep small maps for V1-shaped cache.
+# Vendor header v1.41: ReturnAirSensor_e starts at 1, FanAutoType_e at 0.
+# https://developer.izone.com.au/downloads/iZone_JSON_datastrings.h
 _RAS = {
     0: "const",
-    1: "master",
-    2: "RAS",
+    1: "RAS",
+    2: "master",
     3: "zones",
 }
 _FAN_AUTO_TYPE = {
+    0: "2-speed",
     1: "3-speed",
-    2: "2-speed",
+    2: "var-speed",
     3: "4-speed",
-    4: "var-speed",
 }
 
 
@@ -234,8 +236,11 @@ def system_v2_to_settings(
     if not fan_auto_en:
         fan_auto = "disabled"
     else:
-        fan_auto = _FAN_AUTO_TYPE.get(
-            int(system_v2.get("FanAutoType") or 0), "unknown"
+        fan_type = system_v2.get("FanAutoType")
+        fan_auto = (
+            _FAN_AUTO_TYPE.get(int(fan_type), "unknown")
+            if fan_type is not None
+            else "unknown"
         )
 
     sys_type = system_v2.get("SysType", "0")
