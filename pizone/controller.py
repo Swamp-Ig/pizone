@@ -1094,9 +1094,7 @@ class Controller:
                 await self._http_post(command, data)
                 await self._fetch_zone_group(group, notify=True)
 
-    async def _fetch_zone_v2_unlocked(
-        self, index: int, notify: bool = True
-    ) -> None:
+    async def _fetch_zone_v2_unlocked(self, index: int, notify: bool = True) -> None:
         """Refresh one zone via Type=2. Caller must hold ``_sending_lock``."""
         if index < 0 or index >= len(self.zones):
             return
@@ -1105,9 +1103,7 @@ class Controller:
             data, index=index, uid=self._device_uid
         ):
             raise ConnectionError(f"Invalid V2 zone response for index {index}")
-        zone_data = v2_mod.zones_v2_to_zone_data(
-            cast(dict[str, Any], data["ZonesV2"])
-        )
+        zone_data = v2_mod.zones_v2_to_zone_data(cast(dict[str, Any], data["ZonesV2"]))
         self.zones[index]._update_zone(zone_data, notify)  # noqa: SLF001
 
     async def _http_command_v2(self, payload: dict[str, Any]) -> str:
@@ -1129,9 +1125,7 @@ class Controller:
             self._v2_use_content_type = mode
         if body.strip().startswith("{ERROR"):
             raise ControllerCommandError(f"Server returned error state {body}")
-        if body.endswith("{OK}"):
-            body = body[:-4]
-        return body
+        return body.removesuffix("{OK}")
 
     def _set_bridge_ok(self, ok: bool, ex: Exception | None = None) -> None:
         was_connected = self.connected

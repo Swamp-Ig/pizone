@@ -76,9 +76,7 @@ class FakeHttpSession:
         response: FakeHttpResponse | None = None,
         *,
         get_response: FakeHttpResponse | None = None,
-        post_response: FakeHttpResponse
-        | Callable[..., FakeHttpResponse]
-        | None = None,
+        post_response: FakeHttpResponse | Callable[..., FakeHttpResponse] | None = None,
         get_error: Exception | None = None,
         post_error: Exception | None = None,
     ) -> None:
