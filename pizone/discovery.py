@@ -709,11 +709,11 @@ class DiscoveryService:
 
         if not isinstance(data, dict):
             return None
-        uid = data.get("AirStreamDeviceUId")
-        if not isinstance(uid, str) or not uid:
+        v1_uid = data.get("AirStreamDeviceUId")
+        if not isinstance(v1_uid, str) or not v1_uid:
             return None
         return ControllerProbe(
-            endpoint=ControllerEndpoint(uid=uid, host=host),
+            endpoint=ControllerEndpoint(uid=v1_uid, host=host),
             system_settings=data,
             read_api="v1",
         )

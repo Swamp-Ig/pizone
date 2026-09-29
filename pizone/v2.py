@@ -1,7 +1,7 @@
 """iZone API v2 wire enums, translation, requests, and V1-shaped normalizers.
 
 V2 reads use ``iZoneRequestV2``; writes use ``iZoneCommandV2`` when the
-controller ``_read_api`` is ``\"v2\"``. Content-Type polarity differs by
+controller ``_read_api`` is ``"v2"``. Content-Type polarity differs by
 firmware — probe once and cache; do not thrash.
 """
 
@@ -13,9 +13,10 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from .zone import Zone
+
 if TYPE_CHECKING:
     from .controller import Controller
-    from .zone import Zone
 
 _LOG = logging.getLogger("pizone.v2")
 
@@ -95,12 +96,12 @@ class ZoneModeWire(IntEnum):
 
 
 def temp_to_wire(celsius: float) -> int:
-    """Degrees C → V2 ×100 int."""
-    return int(round(float(celsius) * 100))
+    """Convert degrees C to a V2 integer in hundredths of a degree."""
+    return round(float(celsius) * 100)
 
 
 def temp_from_wire(value: Any) -> float:
-    """V2 ×100 (or pass-through float) → degrees C."""
+    """Convert V2 hundredths (or a pass-through float) to degrees C."""
     if value is None:
         return 0.0
     if isinstance(value, float) and value < 100:
@@ -109,7 +110,7 @@ def temp_from_wire(value: Any) -> float:
 
 
 def temp_to_v1_str(value: Any) -> str:
-    """V2 ×100 (or pass-through) → V1-style temperature string."""
+    """Convert V2 hundredths (or pass-through) to a V1 temperature string."""
     if value is None:
         return "0.0"
     if isinstance(value, str):
@@ -118,12 +119,15 @@ def temp_to_v1_str(value: Any) -> str:
 
 
 def mode_from_wire(raw: int) -> Controller.Mode:
-    from .controller import Controller
+    """Decode a system mode into the public controller enum."""
+    # Controller imports this module, so the runtime enum import must be local.
+    from .controller import Controller  # noqa: PLC0415
 
     return Controller.Mode[SysModeWire(raw).name]
 
 
 def mode_to_wire(mode: Controller.Mode) -> SysModeWire:
+    """Encode a public controller mode for V2."""
     try:
         return SysModeWire[mode.name]
     except KeyError as ex:
@@ -131,7 +135,8 @@ def mode_to_wire(mode: Controller.Mode) -> SysModeWire:
 
 
 def fan_from_wire(raw: int) -> Controller.Fan:
-    from .controller import Controller
+    """Decode a fan speed supported by the public controller enum."""
+    from .controller import Controller  # noqa: PLC0415
 
     name = SysFanWire(raw).name
     try:
@@ -141,6 +146,7 @@ def fan_from_wire(raw: int) -> Controller.Fan:
 
 
 def fan_to_wire(fan: Controller.Fan) -> SysFanWire:
+    """Encode a public controller fan speed for V2."""
     try:
         return SysFanWire[fan.name]
     except KeyError as ex:
@@ -148,22 +154,22 @@ def fan_to_wire(fan: Controller.Fan) -> SysFanWire:
 
 
 def zone_mode_from_wire(raw: int) -> Zone.Mode:
-    from .zone import Zone
-
+    """Decode a zone mode supported by the public zone enum."""
     return Zone.Mode[ZoneModeWire(raw).name]
 
 
 def zone_mode_to_wire(mode: Zone.Mode) -> ZoneModeWire:
+    """Encode a public zone mode for V2."""
     return ZoneModeWire[mode.name]
 
 
 def zone_type_from_wire(raw: int) -> Zone.Type:
-    from .zone import Zone
-
+    """Decode a V2 zone type."""
     return Zone.Type[ZoneTypeWire(raw).name]
 
 
 def zone_type_to_wire(ztype: Zone.Type) -> ZoneTypeWire:
+    """Encode a public zone type for V2."""
     return ZoneTypeWire[ztype.name]
 
 
@@ -188,6 +194,13 @@ def zones_v2_useful(data: dict[str, Any], *, index: int | None = None) -> bool:
     if index is not None and int(zone["Index"]) != index:
         return False
     return True
+
+
+def _fan_auto_from_system(system_v2: dict[str, Any]) -> str:
+    """Translate the V2 fan capability fields into a V1-style capability."""
+    if not int(system_v2.get("FanAutoEn") or 0):
+        return "disabled"
+    return _FAN_AUTO_TYPE.get(int(system_v2.get("FanAutoType") or 0), "unknown")
 
 
 def system_v2_to_settings(
@@ -230,13 +243,7 @@ def system_v2_to_settings(
     else:
         eco_lock_val = "true" if int(eco_lock) else "false"
 
-    fan_auto_en = int(system_v2.get("FanAutoEn") or 0)
-    if not fan_auto_en:
-        fan_auto = "disabled"
-    else:
-        fan_auto = _FAN_AUTO_TYPE.get(
-            int(system_v2.get("FanAutoType") or 0), "unknown"
-        )
+    fan_auto = _fan_auto_from_system(system_v2)
 
     sys_type = system_v2.get("SysType", "0")
     if not isinstance(sys_type, str):
@@ -321,29 +328,23 @@ def zones_v2_to_zone_data(zone_v2: dict[str, Any]) -> dict[str, str | int | floa
     return data
 
 
-def system_command_to_v2(
-    state: str, value: Any, send: Any
-) -> dict[str, Any] | None:
+def system_command_to_v2(state: str, value: Any, send: Any) -> dict[str, Any] | None:
     """Map a V1-style system command to an iZoneCommandV2 body, or None to use V1."""
     del send
     if state == "SysOn":
         on = value in (True, "on", 1, "1")
         return {"SysOn": int(SysOnWire.ON if on else SysOnWire.OFF)}
     if state == "SysMode":
-        from .controller import Controller
+        from .controller import Controller  # noqa: PLC0415
 
         mode = (
-            value
-            if isinstance(value, Controller.Mode)
-            else Controller.Mode(str(value))
+            value if isinstance(value, Controller.Mode) else Controller.Mode(str(value))
         )
         return {"SysMode": int(mode_to_wire(mode))}
     if state == "SysFan":
-        from .controller import Controller
+        from .controller import Controller  # noqa: PLC0415
 
-        fan = (
-            value if isinstance(value, Controller.Fan) else Controller.Fan(str(value))
-        )
+        fan = value if isinstance(value, Controller.Fan) else Controller.Fan(str(value))
         return {"SysFan": int(fan_to_wire(fan))}
     if state == "SleepTimer":
         return {"SysSleepTimer": int(value)}
@@ -360,13 +361,9 @@ def zone_command_to_v2(
     inner = data[command]
     cmd_val = str(inner["Command"])
     if command == "AirMinCommand":
-        return {
-            "ZoneMinAir": {"Index": zone_index, "MinAir": int(float(cmd_val))}
-        }
+        return {"ZoneMinAir": {"Index": zone_index, "MinAir": int(float(cmd_val))}}
     if command == "AirMaxCommand":
-        return {
-            "ZoneMaxAir": {"Index": zone_index, "MaxAir": int(float(cmd_val))}
-        }
+        return {"ZoneMaxAir": {"Index": zone_index, "MaxAir": int(float(cmd_val))}}
     if command == "ZoneCommand":
         if cmd_val in ("open", "close", "auto"):
             return {

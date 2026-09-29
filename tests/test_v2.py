@@ -54,13 +54,9 @@ def test_mode_fan_zone_enum_round_trips() -> None:
     for fan in Controller.Fan:
         assert v2_mod.fan_from_wire(int(v2_mod.fan_to_wire(fan))) is fan
     for zmode in Zone.Mode:
-        assert (
-            v2_mod.zone_mode_from_wire(int(v2_mod.zone_mode_to_wire(zmode))) is zmode
-        )
+        assert v2_mod.zone_mode_from_wire(int(v2_mod.zone_mode_to_wire(zmode))) is zmode
     for ztype in Zone.Type:
-        assert (
-            v2_mod.zone_type_from_wire(int(v2_mod.zone_type_to_wire(ztype))) is ztype
-        )
+        assert v2_mod.zone_type_from_wire(int(v2_mod.zone_type_to_wire(ztype))) is ztype
 
 
 def test_free_air_has_no_sys_mode_wire() -> None:
