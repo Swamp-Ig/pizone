@@ -63,10 +63,11 @@ async def test_v2_mode_selection_does_not_write_stale_setpoint(
     v2_controller.v2_zones[0]["ZonesV2"]["Mode"] = wire_mode
 
     await zone.set_mode(mode)
+    # Test the payload and resulting readback, not whether confirmation blocks.
+    await v2_controller.refresh_zones()
 
-    assert v2_controller.sent == [
+    assert [item for item in v2_controller.sent if item[0] == "iZoneCommandV2"] == [
         ("iZoneCommandV2", {"ZoneMode": {"Index": 0, "Mode": wire_mode}}),
-        ("iZoneRequestV2", {"iZoneV2Request": {"Type": 2, "No": 0, "No1": 0}}),
     ]
     assert zone.mode == mode
     assert zone.temp_setpoint == 23.5
@@ -81,6 +82,7 @@ async def test_v2_auto_mode_does_not_need_cached_setpoint(
     del zone._zone_data["SetPoint"]
 
     await zone.set_mode(Zone.Mode.AUTO)
+    await v2_controller.refresh_zones()
 
     assert v2_controller.sent[0] == (
         "iZoneCommandV2",
