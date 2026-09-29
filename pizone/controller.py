@@ -1159,6 +1159,14 @@ class Controller:
                 zone_data = {**zone_data, "Mode": pending.mode}
         self.zones[index]._update_zone(zone_data, notify)  # noqa: SLF001
 
+    async def _wait_for_zone_confirm_wake(self, wake_at: float) -> None:
+        """Wait for a new command or the next scheduled confirmation deadline."""
+        try:
+            async with asyncio.timeout_at(wake_at):
+                await self._zone_confirm_wake.wait()
+        except TimeoutError:
+            pass
+
     async def _confirm_zone_modes(self) -> None:
         """Bounded, read-only confirmation; never resend a zone command."""
         loop = asyncio.get_running_loop()
@@ -1181,11 +1189,7 @@ class Controller:
                 )
                 self._zone_confirm_wake.clear()
                 if wake_at > loop.time():
-                    try:
-                        async with asyncio.timeout_at(wake_at):
-                            await self._zone_confirm_wake.wait()
-                    except TimeoutError:
-                        pass
+                    await self._wait_for_zone_confirm_wake(wake_at)
                     continue
                 try:
                     async with asyncio.timeout_at(pending.deadline), self._sending_lock:
