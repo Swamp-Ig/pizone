@@ -1,9 +1,10 @@
 """iZone controller interface."""
 
 import asyncio
-from asyncio import Condition, Lock
+from asyncio import Condition, Event, Lock, Task
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager, nullcontext
+from dataclasses import dataclass
 from enum import Enum
 from functools import wraps
 import json
@@ -22,6 +23,16 @@ if TYPE_CHECKING:
     from .discovery import DiscoveryService, Listener
 
 _LOG = logging.getLogger("pizone.controller")
+
+
+@dataclass
+class _ZoneModeConfirmation:
+    """One acknowledged mode command, owned by one controller instance."""
+
+    mode: str
+    issued: float
+    next_read: float
+    deadline: float
 
 
 def _refresh_api(
@@ -89,6 +100,11 @@ class Controller:
 
     UPDATE_REFRESH_DELAY = 5.0
     """Delay after sending a command before refreshing data, in seconds."""
+
+    ZONE_CONFIRM_DELAY = 0.25
+    ZONE_CONFIRM_INTERVAL = 2.0
+    ZONE_CONFIRM_WINDOW = 30.0
+    ZONE_OPTIMISTIC_WINDOW = 6.0
 
     _VALID_FAN_MODES = {
         "disabled": [Fan.LOW, Fan.MED, Fan.HIGH],
@@ -165,6 +181,10 @@ class Controller:
         self._scan_condition = Condition()
         self._refresh_depth: int = 0
         self._refresh_fail_ex: ConnectionError | None = None
+        self._zone_mode_confirmations: dict[int, _ZoneModeConfirmation] = {}
+        self._zone_confirm_task: Task[None] | None = None
+        self._zone_confirm_wake = Event()
+        self._zone_confirm_last_read = float("-inf")
 
     @property
     def _legacy_pathway(self) -> bool:
@@ -420,6 +440,10 @@ class Controller:
         if self._closed:
             return
         self._closed = True
+        self._zone_mode_confirmations.clear()
+        if self._zone_confirm_task is not None:
+            self._zone_confirm_task.cancel()
+            await asyncio.gather(self._zone_confirm_task, return_exceptions=True)
         self._on_address_changed = None
         self._discovery_service._controller_closed(self)  # noqa: SLF001
         async with self._scan_condition:
@@ -862,28 +886,15 @@ class Controller:
         if zones == 0:
             return
         if self._read_api == "v2":
-            async with self._sending_lock:
-                await self._fetch_zones_v2_unlocked(notify=notify)
+            # Keep HTTP sequential, but yield the lock to queued user commands
+            # between zones rather than holding it for an entire polling sweep.
+            for index in range(zones):
+                async with self._sending_lock:
+                    await self._fetch_zone_v2_unlocked(index, notify=notify)
             return
         await self._gather_refresh(
             *[self._fetch_zone_group(i, notify) for i in range(0, zones, 4)]
         )
-
-    async def _fetch_zones_v2_unlocked(self, notify: bool = True) -> None:
-        """Sequential ZonesV2 Type=2. Caller must hold ``_sending_lock``."""
-        for index, zone in enumerate(self.zones):
-            data = await self._v2_request(2, index)
-            if data is None or not v2_mod.zones_v2_useful(data, index=index):
-                _LOG.debug(
-                    "V2 zone refresh miss uid=%s index=%s; retaining cache",
-                    self._device_uid,
-                    index,
-                )
-                continue
-            zone_data = v2_mod.zones_v2_to_zone_data(
-                cast(dict[str, Any], data["ZonesV2"])
-            )
-            zone._update_zone(zone_data, notify)  # noqa: SLF001
 
     async def _fetch_power(self, notify: bool = True) -> None:
         """Fetch power monitor status when enabled (no refresh scope).
@@ -905,10 +916,8 @@ class Controller:
     async def _fetch_all(self, notify: bool = True) -> None:
         """System + zones [+ power] fetch (no refresh scope)."""
         if self._read_api == "v2":
-            # Sequential under one lock: V2 zone gather is slower on typical bridges.
-            async with self._sending_lock:
-                await self._fetch_system_v2_unlocked(notify)
-                await self._fetch_zones_v2_unlocked(notify)
+            await self._fetch_system(notify)
+            await self._fetch_zones(notify)
             await self._fetch_power(notify)
             return
         zones = len(self.zones)
@@ -1088,18 +1097,21 @@ class Controller:
 
         async with self._sending_lock, self._refresh_scope():
             if self._read_api == "v2":
-                await self._http_command_v2(
-                    v2_mod.zone_command_to_v2(command, data, zone_index)
-                )
-                await self._fetch_zone_v2_unlocked(zone_index, notify=True)
+                if self._closed:
+                    raise ConnectionError("Controller is closed")
+                payload = v2_mod.zone_command_to_v2(command, data, zone_index)
+                await self._http_command_v2(payload)
+                if "ZoneMode" in payload:
+                    mode = v2_mod.zone_mode_from_wire(payload["ZoneMode"]["Mode"])
+                    self._track_zone_mode(zone_index, mode.value)
+                else:
+                    await self._fetch_zone_v2_unlocked(zone_index, notify=True)
             else:
                 group = (zone_index // 4) * 4
                 await self._http_post(command, data)
                 await self._fetch_zone_group(group, notify=True)
 
-    async def _fetch_zone_v2_unlocked(
-        self, index: int, notify: bool = True
-    ) -> None:
+    async def _fetch_zone_v2_unlocked(self, index: int, notify: bool = True) -> None:
         """Refresh one zone via Type=2. Caller must hold ``_sending_lock``."""
         if index < 0 or index >= len(self.zones):
             return
@@ -1111,10 +1123,97 @@ class Controller:
                 index,
             )
             return
-        zone_data = v2_mod.zones_v2_to_zone_data(
-            cast(dict[str, Any], data["ZonesV2"])
+        zone_data = v2_mod.zones_v2_to_zone_data(cast(dict[str, Any], data["ZonesV2"]))
+        self._apply_v2_zone_state(index, zone_data, notify)
+
+    def _track_zone_mode(self, index: int, mode: str) -> None:
+        """Coalesce confirmations after ACK without delaying the caller."""
+        if self._closed:
+            return
+        now = asyncio.get_running_loop().time()
+        self._zone_mode_confirmations[index] = _ZoneModeConfirmation(
+            mode, now, now + self.ZONE_CONFIRM_DELAY, now + self.ZONE_CONFIRM_WINDOW
         )
+        self._zone_confirm_wake.set()
+        if self._zone_confirm_task is None or self._zone_confirm_task.done():
+            self._zone_confirm_task = self._discovery_service.create_task(
+                self._confirm_zone_modes()
+            )
+
+    def _expire_zone_modes(self, now: float) -> None:
+        """Expire unconfirmed intent without declaring a reachable hub offline."""
+        for index, pending in list(self._zone_mode_confirmations.items()):
+            if now >= pending.deadline:
+                del self._zone_mode_confirmations[index]
+                _LOG.warning("V2 mode selection unconfirmed for zone %s", index)
+
+    def _apply_v2_zone_state(
+        self, index: int, zone_data: Zone.ZoneData, notify: bool
+    ) -> None:
+        """Allow a short settling window, then show fresh contradictory state."""
+        now = asyncio.get_running_loop().time()
+        self._expire_zone_modes(now)
+        pending = self._zone_mode_confirmations.get(index)
+        if pending is not None:
+            if zone_data["Mode"] == pending.mode:
+                del self._zone_mode_confirmations[index]
+                self._zone_confirm_wake.set()
+            elif now < pending.issued + self.ZONE_OPTIMISTIC_WINDOW:
+                zone_data = {**zone_data, "Mode": pending.mode}
         self.zones[index]._update_zone(zone_data, notify)  # noqa: SLF001
+
+    async def _confirm_zone_modes(self) -> None:
+        """Bounded, read-only confirmation; never resend a zone command."""
+        loop = asyncio.get_running_loop()
+        try:
+            while self._zone_mode_confirmations and not self._closed:
+                self._expire_zone_modes(loop.time())
+                if not self._zone_mode_confirmations:
+                    break
+                index, pending = min(
+                    self._zone_mode_confirmations.items(),
+                    key=lambda item: item[1].next_read,
+                )
+                due = max(
+                    pending.next_read,
+                    self._zone_confirm_last_read + self.ZONE_CONFIRM_INTERVAL,
+                )
+                # Wake for the earliest deadline even when another zone is due first.
+                wake_at = min(
+                    due, *(p.deadline for p in self._zone_mode_confirmations.values())
+                )
+                self._zone_confirm_wake.clear()
+                if wake_at > loop.time():
+                    try:
+                        async with asyncio.timeout_at(wake_at):
+                            await self._zone_confirm_wake.wait()
+                    except TimeoutError:
+                        pass
+                    continue
+                try:
+                    async with asyncio.timeout_at(pending.deadline), self._sending_lock:
+                        if (
+                            self._closed
+                            or self._zone_mode_confirmations.get(index) is not pending
+                        ):
+                            continue
+                        self._zone_confirm_last_read = loop.time()
+                        await self._fetch_zone_v2_unlocked(index, notify=True)
+                except TimeoutError:
+                    # This deadline bounds confirmation, not bridge availability.
+                    pass
+                except ConnectionError as ex:
+                    self._set_bridge_ok(False, ex)
+                    self._nudge_scan()
+                    _LOG.debug("V2 zone confirmation read failed", exc_info=True)
+                else:
+                    self._set_bridge_ok(True)
+                if self._zone_mode_confirmations.get(index) is pending:
+                    pending.next_read = loop.time() + self.ZONE_CONFIRM_INTERVAL
+        finally:
+            self._zone_confirm_task = None
+            if self._closed or self._discovery_service.is_closed:
+                self._zone_mode_confirmations.clear()
 
     async def _http_command_v2(self, payload: dict[str, Any]) -> str:
         """POST iZoneCommandV2 using the cached Content-Type mode."""

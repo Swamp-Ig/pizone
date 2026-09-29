@@ -978,14 +978,18 @@ async def test_v2_zone_commands_confirm_with_type2() -> None:
     controller._is_v2 = True
     controller._v2_use_content_type = False
     controller.v2_system = SAMPLE_SYSTEM_V2
-    controller.v2_zones = SAMPLE_ZONES_V2
+    controller.v2_zones = deepcopy(SAMPLE_ZONES_V2)
     settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
     svc._controllers["000025841"] = controller
     await controller._initialize(system_settings=settings)
     controller.sent.clear()
 
     await controller.zones[0].set_temp_setpoint(22.0)
+    controller.v2_zones[0]["ZonesV2"]["Mode"] = 2
     await controller.zones[0].set_mode(Zone.Mode.CLOSE)
+    # Mode confirmation now runs after ACK, independently of service completion.
+    assert controller._zone_confirm_task is not None
+    await asyncio.wait_for(controller._zone_confirm_task, 2)
     await controller.zones[0].set_airflow_min(20)
 
     assert ("iZoneCommandV2", {"ZoneSetpoint": {"Index": 0, "Setpoint": 2200}}) in (
