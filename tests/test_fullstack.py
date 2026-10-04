@@ -6,11 +6,12 @@
 #   deprecate — legacy track; grep and delete when dual-track ends
 #               (sticky within a function until the next disposition tag).
 
+import asyncio
 from asyncio import Event, wait_for
 
 import pytest
 
-from pizone import Controller, Listener, Zone, discovery
+from pizone import Controller, Listener, Zone, create_discovery, discovery
 
 
 class ListenerTesting(Listener):
@@ -199,3 +200,48 @@ async def test_power() -> None:
             f"power channel {channel.name}: {channel.status_power}W "
             f"ok={channel.device.status_ok}"
         )
+
+
+# disposition: 1.4
+@pytest.mark.hardware
+async def test_v2_command_interleaves_with_zone_poll() -> None:
+    """Interleave a zone-mode command with an in-progress zone poll sweep.
+
+    Exercises the change in pizone#39 where ``_fetch_zones`` no longer holds
+    ``_sending_lock`` for an entire sweep, so a queued command can now run
+    between two sequential Type=2 reads instead of waiting for the whole
+    sweep to finish. Offline fakes can't tell us whether a write landing
+    mid-sweep confuses real firmware, so this needs a live V2 bridge.
+    """
+    service = await create_discovery()
+    try:
+        endpoints = await service.discover_all()
+        assert endpoints, "No iZone controller found on the network"
+        ctrl = await service.create_controller(endpoints[0].uid, endpoints[0].host)
+
+        if ctrl._read_api != "v2":
+            pytest.skip("Discovered controller is not on the V2 read/write path")
+        if not ctrl.zones:
+            pytest.skip("Discovered controller has no zones")
+
+        zone = ctrl.zones[0]
+        old_mode = zone.mode
+        alt_mode = Zone.Mode.OPEN if old_mode != Zone.Mode.OPEN else Zone.Mode.CLOSE
+
+        try:
+            for i in range(8):
+                target = alt_mode if i % 2 == 0 else old_mode
+                poll = asyncio.create_task(ctrl.refresh_zones())
+                await asyncio.sleep(0)  # let the sweep start before the write lands
+                await zone.set_mode(target)
+                assert zone.mode == target
+                await poll
+                assert ctrl.connected
+
+            # Confirm the final state actually stuck on a fresh, independent read.
+            await ctrl.refresh_zones()
+            assert zone.mode == old_mode
+        finally:
+            await zone.set_mode(old_mode)
+    finally:
+        await service.close()
