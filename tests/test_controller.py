@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from pizone import Controller, Listener, Zone, v2 as v2_mod
+from pizone.controller import ControllerCommandError
 
 from .conftest import MockController, MockDiscoveryService, _register_mock_service
 from .power_data import POWER_CONFIG
@@ -1010,9 +1011,7 @@ async def test_v2_zone_commands_confirm_with_type2() -> None:
     await svc.close()
 
 
-# disposition: 1.4
-@pytest.mark.asyncio
-async def test_v2_free_air_still_uses_v1_endpoint() -> None:
+async def _v2_free_air_controller() -> tuple[MockDiscoveryService, MockController]:
     svc = MockDiscoveryService(legacy_pathway=False)
     controller = MockController.from_discovery(
         svc,
@@ -1032,7 +1031,56 @@ async def test_v2_free_air_still_uses_v1_endpoint() -> None:
     svc._controllers["000025841"] = controller
     await controller._initialize(system_settings=settings)
     controller.sent.clear()
+    return svc, controller
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_free_air_uses_isave_when_available() -> None:
+    svc, controller = await _v2_free_air_controller()
+
+    await controller.set_free_air(True)
+    assert ("iZoneCommandV2", {"iSaveOn": 1}) in controller.sent
+    assert not any(cmd == "FreeAir" for cmd, _ in controller.sent)
+    assert controller._isave_v2_unsupported is False
+    await svc.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_free_air_falls_back_and_stays_on_v1() -> None:
+    """iSaveOn is documented but confirmed non-functional on real hardware.
+
+    Try it (V2-only units are untested), but once it errors, remember that
+    for this controller so later calls skip straight to V1.
+    """
+    svc, controller = await _v2_free_air_controller()
+    controller._http_command_v2 = AsyncMock(  # type: ignore[method-assign]
+        side_effect=ControllerCommandError("Server returned error state {ERROR}")
+    )
 
     await controller.set_free_air(True)
     assert ("FreeAir", {"FreeAir": "on"}) in controller.sent
+    assert controller._isave_v2_unsupported is True
+
+    controller.sent.clear()
+    controller._http_command_v2.reset_mock()
+    await controller.set_free_air(False)
+    assert ("FreeAir", {"FreeAir": "off"}) in controller.sent
+    controller._http_command_v2.assert_not_awaited()
+    await svc.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_other_commands_do_not_fall_back_on_command_error() -> None:
+    """Only FreeAir's known-unreliable V2 command gets a V1 fallback."""
+    svc, controller = await _v2_free_air_controller()
+    controller._http_command_v2 = AsyncMock(  # type: ignore[method-assign]
+        side_effect=ControllerCommandError("Server returned error state {ERROR}")
+    )
+
+    with pytest.raises(ControllerCommandError):
+        await controller.set_sleep_timer(30)
+    assert not any(cmd == "SleepTimer" for cmd, _ in controller.sent)
     await svc.close()

@@ -165,6 +165,10 @@ class Controller:
         # UDP ``iZoneV2`` alone must not flip the read path.
         self._read_api: Literal["v1", "v2"] = "v1"
         self._v2_use_content_type: bool | None = None
+        # Set once iSaveOn (V2 FreeAir write) returns {ERROR} on this controller,
+        # so later FreeAir commands go straight to V1 instead of re-probing a
+        # write already known to fail here.
+        self._isave_v2_unsupported: bool = False
 
         self.zones: list[Zone] = []
         self.fan_modes: list[Controller.Fan] = []
@@ -1074,8 +1078,16 @@ class Controller:
         async with self._sending_lock, self._refresh_scope():
             if self._read_api == "v2":
                 v2_payload = v2_mod.system_command_to_v2(state, value, send)
+                if state == "FreeAir" and self._isave_v2_unsupported:
+                    v2_payload = None
                 if v2_payload is not None:
-                    await self._http_command_v2(v2_payload)
+                    try:
+                        await self._http_command_v2(v2_payload)
+                    except ControllerCommandError:
+                        if state != "FreeAir":
+                            raise
+                        self._isave_v2_unsupported = True
+                        await self._http_post(command, {command: send})
                 else:
                     await self._http_post(command, {command: send})
                 self._system_settings[state] = value

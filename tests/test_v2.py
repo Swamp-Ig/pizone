@@ -80,7 +80,8 @@ def test_system_command_to_v2_shapes() -> None:
         "SysSetpoint": 2250
     }
     assert v2_mod.system_command_to_v2("SleepTimer", 30, 30) == {"SysSleepTimer": 30}
-    assert v2_mod.system_command_to_v2("FreeAir", "on", "on") is None
+    assert v2_mod.system_command_to_v2("FreeAir", "on", "on") == {"iSaveOn": 1}
+    assert v2_mod.system_command_to_v2("FreeAir", "off", "off") == {"iSaveOn": 0}
 
 
 def test_zone_command_to_v2_shapes() -> None:
@@ -122,6 +123,23 @@ def test_system_v2_to_settings_enums_and_temps() -> None:
     assert settings["NoOfZones"] == 2
     assert settings["FanAuto"] == "3-speed"
     assert settings["FreeAir"] == "off"
+
+
+@pytest.mark.parametrize(
+    ("isave_enable", "isave_on", "expected"),
+    [(0, 0, "disabled"), (0, 1, "disabled"), (1, 0, "off"), (1, 1, "on")],
+)
+def test_free_air_reads_from_isave_fields(
+    isave_enable: int, isave_on: int, expected: str
+) -> None:
+    """Free Air status comes from iSaveEnable/iSaveOn; there is no "FreeAir" key."""
+    system = {
+        **SAMPLE_SYSTEM_V2["SystemV2"],
+        "iSaveEnable": isave_enable,
+        "iSaveOn": isave_on,
+    }
+    settings = v2_mod.system_v2_to_settings(cast(dict, system), "000025841")
+    assert settings["FreeAir"] == expected
 
 
 def test_zones_v2_to_zone_data_preserves_battery() -> None:

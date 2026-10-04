@@ -250,6 +250,17 @@ def _fan_auto_from_system(system_v2: dict[str, Any]) -> str:
     )
 
 
+def _free_air_from_system(system_v2: dict[str, Any]) -> str:
+    """Translate iSaveEnable/iSaveOn into a V1-style "disabled"/"off"/"on" value.
+
+    There is no "FreeAir" key on real V2 firmware; Free Air is iSaveEnable
+    (whether the feature exists) plus iSaveOn (current state).
+    """
+    if not int(system_v2.get("iSaveEnable") or 0):
+        return "disabled"
+    return "on" if int(system_v2.get("iSaveOn") or 0) else "off"
+
+
 def system_v2_to_settings(
     system_v2: dict[str, Any], uid: str
 ) -> dict[str, str | int | float]:
@@ -296,9 +307,7 @@ def system_v2_to_settings(
     if not isinstance(sys_type, str):
         sys_type = str(sys_type)
 
-    free_air = system_v2.get("FreeAir", "off")
-    if isinstance(free_air, int):
-        free_air = "on" if free_air else "off"
+    free_air = _free_air_from_system(system_v2)
 
     return {
         "AirStreamDeviceUId": uid,
@@ -397,7 +406,17 @@ def system_command_to_v2(state: str, value: Any, send: Any) -> dict[str, Any] | 
         return {"SysSleepTimer": int(value)}
     if state == "Setpoint":
         return {"SysSetpoint": temp_to_wire(float(value))}
-    # FreeAir and unknown commands stay on V1 endpoints.
+    if state == "FreeAir":
+        # Documented (vendor API header v1.41) and the field name/reads check
+        # out, but confirmed non-functional against a real dual-stack unit —
+        # every Content-Type/value-type combination returned {ERROR} — while
+        # every other V2 command on the same unit worked. Still worth trying
+        # per-controller, since V2-only units are untested; see Controller
+        # ``_isave_v2_unsupported`` for the sticky fallback once it's confirmed
+        # broken on a given controller.
+        on = value in (True, "on", 1, "1")
+        return {"iSaveOn": 1 if on else 0}
+    # Unknown commands stay on V1 endpoints.
     return None
 
 
