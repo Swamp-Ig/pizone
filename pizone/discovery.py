@@ -54,6 +54,7 @@ RESCAN_COOLDOWN = 5.0
 
 # disposition: 1.4 — active discover_by_uid / discover_all wait
 SCAN_TIMEOUT = 5.0
+TRANSPORT_CLOSE_TIMEOUT = 1.0
 
 # Inbound UDP datagrams retained for diagnostics (ASPort, CHANGED_*, garbage).
 UDP_REPLY_BUFFER_SIZE = 20
@@ -775,9 +776,19 @@ class DiscoveryService:
             # DatagramTransport.close() only schedules sock release via
             # call_soon(_call_connection_lost). Wait until connection_lost
             # clears _transport so a following create_discovery can bind :7005.
-            self._transport.close()
-            while self._transport is not None:
-                await asyncio.sleep(0)
+            transport = self._transport
+            transport.close()
+            try:
+                async with asyncio.timeout(TRANSPORT_CLOSE_TIMEOUT):
+                    while self._transport is transport:
+                        await asyncio.sleep(0.01)
+            except TimeoutError:
+                # A failed Windows Proactor send can leave connection_lost
+                # unscheduled. Abort pending I/O instead of hanging shutdown.
+                _LOG.warning("Discovery transport did not close; aborting it")
+                transport.abort()
+                if self._transport is transport:
+                    self._transport = None
 
         pending = [task for task in list(self._tasks) if task is not current]
         for task in pending:
