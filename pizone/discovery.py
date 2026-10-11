@@ -7,6 +7,7 @@ from asyncio import (
     Condition,
     DatagramProtocol,
     DatagramTransport,
+    Event,
     Lock,
     Task,
 )
@@ -54,6 +55,7 @@ RESCAN_COOLDOWN = 5.0
 
 # disposition: 1.4 — active discover_by_uid / discover_all wait
 SCAN_TIMEOUT = 5.0
+TRANSPORT_CLOSE_TIMEOUT = 1.0
 
 # Inbound UDP datagrams retained for diagnostics (ASPort, CHANGED_*, garbage).
 UDP_REPLY_BUFFER_SIZE = 20
@@ -177,6 +179,8 @@ class DiscoveryService:
         self._own_session = session is None
 
         self._transport: DatagramTransport | None = None
+        # Set by connection_lost once the event loop has released the socket.
+        self._transport_released = Event()
 
         # disposition: deprecate
         self._scan_condition = Condition()
@@ -344,10 +348,13 @@ class DiscoveryService:
                 yield str(interface.network.broadcast_address)
 
     def _send_broadcasts(self) -> None:
-        assert self._transport is not None, "Discovery transport is not ready"
+        transport = self._transport
+        if transport is None:
+            # Closing or closed: nothing to send on.
+            return
         for broadcast in self._get_broadcasts():
             _LOG.debug("Sending discovery message to addr %s", broadcast)
-            self._transport.sendto(DISCOVERY_MSG, (broadcast, DISCOVERY_PORT))
+            transport.sendto(DISCOVERY_MSG, (broadcast, DISCOVERY_PORT))
 
     # disposition: deprecate
     async def _scan_loop(self) -> None:
@@ -771,13 +778,23 @@ class DiscoveryService:
             return
         _LOG.info("Close called on discovery service.")
         self._close_task = current
-        if self._transport is not None:
+        transport = self._transport
+        if transport is not None:
+            # Clear _transport first: None means "closing or closed", so
+            # senders short-circuit instead of writing to a closing socket.
+            self._transport = None
             # DatagramTransport.close() only schedules sock release via
-            # call_soon(_call_connection_lost). Wait until connection_lost
-            # clears _transport so a following create_discovery can bind :7005.
-            self._transport.close()
-            while self._transport is not None:
-                await asyncio.sleep(0)
+            # call_soon(_call_connection_lost). Wait for connection_lost so a
+            # following create_discovery can bind :7005.
+            transport.close()
+            try:
+                async with asyncio.timeout(TRANSPORT_CLOSE_TIMEOUT):
+                    await self._transport_released.wait()
+            except TimeoutError:
+                # A failed Windows Proactor send can leave connection_lost
+                # unscheduled. Abort pending I/O instead of hanging shutdown.
+                _LOG.debug("Discovery transport did not close; aborting it")
+                transport.abort()
 
         pending = [task for task in list(self._tasks) if task is not current]
         for task in pending:
@@ -794,6 +811,7 @@ class DiscoveryService:
     def _on_connection_lost(self, exc: Exception | None) -> None:
         _LOG.debug("Connection Lost")
         self._transport = None
+        self._transport_released.set()
         if not self._close_task:
             _LOG.error("Connection Lost unexpectedly: %s", repr(exc))
             self.create_task(self.close())
