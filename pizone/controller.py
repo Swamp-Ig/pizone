@@ -601,7 +601,8 @@ class Controller:
     async def set_sleep_timer(self, value: int) -> None:
         """Set the sleep timer.
 
-        Valid settings are 0, 30, 60, 90, and 120.
+        Valid settings are 0, 30, 60, 90, and 120. Some bridges turn the unit
+        on when a non-zero sleep timer is set, treating it as "run, then stop".
 
         Raises:
             AttributeError: If the value is out of range or not divisible by 30.
