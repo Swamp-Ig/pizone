@@ -56,6 +56,8 @@ class MockController(Controller):
         self.sent: list[tuple[str, Any]] = []
         self._connected = True
         self.v2_probe_response: str | None = None
+        self.v2_system: dict[str, Any] | None = None
+        self.v2_zones: dict[int, dict[str, Any]] = {}
         self.power_config: dict[str, Any] | None = None
         self.fail_power_types: set[int] = set()
 
@@ -96,6 +98,40 @@ class MockController(Controller):
             if req_type == 2:
                 return json.dumps({"PowerMonitorStatus": POWER_STATUS})
         return ""
+
+    async def _http_command_v2(self, payload: dict[str, Any]) -> str:
+        """Record iZoneCommandV2 payloads without network I/O."""
+        if not self._bridge_ok:
+            raise ConnectionError("Unable to connect to the controller")
+        self._check_discovery_connected()
+        self.sent.append(("iZoneCommandV2", payload))
+        return ""
+
+    async def _v2_request(self, req_type: int, no: int = 0) -> dict[str, Any] | None:
+        """Serve V2 shapes from ``v2_system`` / ``v2_zones`` when configured."""
+        if req_type == 1 and self.v2_system is not None:
+            self._check_discovery_connected()
+            if not self._bridge_ok:
+                raise ConnectionError("Unable to connect to the controller")
+            self.sent.append(
+                (
+                    "iZoneRequestV2",
+                    {"iZoneV2Request": {"Type": 1, "No": 0, "No1": 0}},
+                )
+            )
+            return deepcopy(self.v2_system)
+        if req_type == 2 and no in self.v2_zones:
+            self._check_discovery_connected()
+            if not self._bridge_ok:
+                raise ConnectionError("Unable to connect to the controller")
+            self.sent.append(
+                (
+                    "iZoneRequestV2",
+                    {"iZoneV2Request": {"Type": 2, "No": no, "No1": 0}},
+                )
+            )
+            return deepcopy(self.v2_zones[no])
+        return await super()._v2_request(req_type, no)
 
 
 class MockDiscoveryService(DiscoveryService):

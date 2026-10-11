@@ -25,9 +25,11 @@ from pizone import (
 )
 from pizone.const import PLACEHOLDER_DEVICE_UID
 from pizone.discovery import DiscoveryService
+from pizone.types import ControllerProbe
 
 from .conftest import MockController, MockDiscoveryService
 from .http_fakes import FakeHttpResponse, FakeHttpSession
+from .v2_fixtures import v2_routing_session
 
 discovery_module = sys.modules["pizone.discovery"]
 
@@ -48,8 +50,12 @@ def _system_settings_response(uid: str) -> FakeHttpResponse:
     return FakeHttpResponse(200, json_data=_system_settings(uid))
 
 
-def _probe_result(uid: str, host: str) -> tuple[ControllerEndpoint, dict[str, object]]:
-    return ControllerEndpoint(uid=uid, host=host), _system_settings(uid)
+def _probe_result(uid: str, host: str) -> ControllerProbe:
+    return ControllerProbe(
+        endpoint=ControllerEndpoint(uid=uid, host=host),
+        system_settings=_system_settings(uid),
+        read_api="v1",
+    )
 
 
 # disposition: 1.4
@@ -935,4 +941,73 @@ async def test_discover_all_omits_placeholder_uid() -> None:
     assert endpoints == []
     assert discovered == []
     assert service._known_endpoints == {}
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_create_controller_prefers_useful_v2() -> None:
+    """Useful SystemV2 wins even when V1 SystemSettings would also work."""
+    service = MockDiscoveryService(legacy_pathway=False)
+    session = v2_routing_session(
+        use_content_type=False,
+        get_response=_system_settings_response("000025841"),
+    )
+    service._session = cast(ClientSession, session)
+    controller = await service.create_controller("000025841", "10.0.0.90")
+    assert controller.is_v2 is True
+    assert controller._read_api == "v2"
+    assert controller.mode == Controller.Mode.HEAT
+    assert controller.fan == Controller.Fan.LOW
+    assert len(controller.zones) == 2
+    assert controller.zones[0].dump_state()["BattVolt"] == 310
+    assert controller.zones[0].name == "Kitchen"
+    # Type=1 system + Type=2 x2 zones (no V1 GET).
+    assert session.get_calls == 0
+    assert session.post_calls >= 3
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_create_controller_v2_with_content_type() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    session = v2_routing_session(use_content_type=True)
+    service._session = cast(ClientSession, session)
+    controller = await service.create_controller("000025841", "10.0.0.90")
+    assert controller.is_v2 is True
+    assert controller._v2_use_content_type is True
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_create_controller_falls_back_to_v1_when_v2_useless() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    session = FakeHttpSession(
+        get_response=_system_settings_response("000025841"),
+        post_response=FakeHttpResponse(200, body="{ERROR}"),
+    )
+    service._session = cast(ClientSession, session)
+    controller = await service.create_controller("000025841", "10.0.0.90")
+    assert controller.is_v2 is False
+    assert controller._read_api == "v1"
+    assert session.get_calls == 1
+    await service.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_create_controller_empty_v1_and_v2_error_raises() -> None:
+    service = MockDiscoveryService(legacy_pathway=False)
+    session = FakeHttpSession(
+        get_response=FakeHttpResponse(200, body=""),
+        post_response=FakeHttpResponse(200, body="{ERROR}"),
+    )
+    service._session = cast(ClientSession, session)
+    with (
+        patch.object(service, "discover_by_uid", AsyncMock(return_value=None)),
+        pytest.raises(ConnectionError, match="Unable to connect"),
+    ):
+        await service.create_controller("000025841", "10.0.0.90")
     await service.close()

@@ -26,10 +26,11 @@ import aiohttp
 from aiohttp import ClientSession
 import ifaddr
 
+from . import v2 as v2_mod
 from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
 from .exceptions import ControllerAlreadyClaimedError, raise_if_placeholder_uid
-from .types import ControllerEndpoint
+from .types import ControllerEndpoint, ControllerProbe
 from .zone import Zone
 
 # disposition: 1.4 | deprecate  (untagged = keep)
@@ -477,10 +478,9 @@ class DiscoveryService:
         probed = await self._probe(host)
         if probed is None:
             return None
-        endpoint, _settings = probed
-        raise_if_placeholder_uid(endpoint.uid)
-        self._cache_endpoint(endpoint)
-        return endpoint
+        raise_if_placeholder_uid(probed.endpoint.uid)
+        self._cache_endpoint(probed.endpoint)
+        return probed.endpoint
 
     # disposition: 1.4
     async def discover_by_uid(self, uid: str) -> ControllerEndpoint | None:
@@ -519,11 +519,10 @@ class DiscoveryService:
             probed = await self._probe(host)
             if probed is None:
                 return None
-            endpoint, _settings = probed
-            if endpoint.uid != uid:
+            if probed.endpoint.uid != uid:
                 return None
-            self._cache_endpoint(endpoint)
-            return endpoint
+            self._cache_endpoint(probed.endpoint)
+            return probed.endpoint
 
     # disposition: 1.4
     async def discover_all(self) -> list[ControllerEndpoint]:
@@ -558,17 +557,16 @@ class DiscoveryService:
                 probed = await self._probe(host)
                 if probed is None:
                     continue
-                endpoint, _settings = probed
-                if endpoint.uid == PLACEHOLDER_DEVICE_UID:
+                if probed.endpoint.uid == PLACEHOLDER_DEVICE_UID:
                     continue
                 try:
-                    self._cache_endpoint(endpoint)
+                    self._cache_endpoint(probed.endpoint)
                 except ControllerAlreadyClaimedError:
                     continue
-                verified.append(endpoint)
-                if endpoint.uid not in notified:
-                    self._emit_endpoint_discovered(endpoint)
-                    notified.add(endpoint.uid)
+                verified.append(probed.endpoint)
+                if probed.endpoint.uid not in notified:
+                    self._emit_endpoint_discovered(probed.endpoint)
+                    notified.add(probed.endpoint.uid)
             return verified
 
     # disposition: 1.4
@@ -644,19 +642,17 @@ class DiscoveryService:
         probed = await self._probe(host)
         if probed is None:
             raise ConnectionError(f"Unable to connect to controller {uid} at {host}")
-        endpoint, system_settings = probed
-        if endpoint.uid != uid:
+        if probed.endpoint.uid != uid:
             raise ConnectionError(f"Unable to connect to controller {uid} at {host}")
 
         controller = await self._controller_cls.create(
             self,
             self._event_coordinator,
-            endpoint=endpoint,
-            system_settings=cast(Controller.ControllerData, system_settings),
+            probe=probed,
             on_address_changed=on_address_changed,
         )
         self._controllers[uid] = controller
-        self._claim_endpoint(endpoint)
+        self._claim_endpoint(probed.endpoint)
         return controller
 
     # disposition: 1.4
@@ -676,13 +672,28 @@ class DiscoveryService:
         )
 
     # disposition: 1.4
-    async def _probe(
-        self, host: str
-    ) -> tuple[ControllerEndpoint, dict[str, Any]] | None:
-        """HTTP GET /SystemSettings; None on transport or content-shaped failure."""
+    async def _probe(self, host: str) -> ControllerProbe | None:
+        """Probe controller; prefer useful V2 SystemV2, else V1 SystemSettings."""
         session = self._session
         if session is None:
             return None
+
+        v2_hit = await v2_mod.fetch_useful_system(
+            session, host, timeout=Controller.REQUEST_TIMEOUT
+        )
+        if v2_hit is not None:
+            raw, use_ct = v2_hit
+            uid = cast(str, raw["AirStreamDeviceUId"])
+            settings = v2_mod.system_v2_to_settings(
+                cast(dict[str, Any], raw["SystemV2"]), uid
+            )
+            return ControllerProbe(
+                endpoint=ControllerEndpoint(uid=uid, host=host),
+                system_settings=settings,
+                read_api="v2",
+                v2_use_content_type=use_ct,
+            )
+
         try:
             async with session.get(
                 f"http://{host}/SystemSettings",
@@ -705,10 +716,14 @@ class DiscoveryService:
 
         if not isinstance(data, dict):
             return None
-        uid = data.get("AirStreamDeviceUId")
-        if not isinstance(uid, str) or not uid:
+        v1_uid = data.get("AirStreamDeviceUId")
+        if not isinstance(v1_uid, str) or not v1_uid:
             return None
-        return ControllerEndpoint(uid=uid, host=host), data
+        return ControllerProbe(
+            endpoint=ControllerEndpoint(uid=v1_uid, host=host),
+            system_settings=data,
+            read_api="v1",
+        )
 
     # disposition: deprecate
     async def fetch_controller(

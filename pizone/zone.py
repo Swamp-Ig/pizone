@@ -186,7 +186,17 @@ class Zone:
         if value == Zone.Mode.AUTO:
             if self.type != Zone.Type.AUTO:
                 raise AttributeError("Can't use auto mode on open/close zone.")
-            await self._send_command("ZoneCommand", self._get_zone_state("SetPoint"))
+            # V2 can select AUTO without overwriting a newer wall-panel setpoint.
+            # V1 still needs the cached setpoint to select temperature control.
+            if (
+                not self._controller._legacy_pathway  # noqa: SLF001
+                and self._controller._read_api == "v2"  # noqa: SLF001
+            ):
+                await self._send_command("ZoneCommand", value.value)
+            else:
+                await self._send_command(
+                    "ZoneCommand", self._get_zone_state("SetPoint")
+                )
             self._zone_data["Mode"] = "auto"
         else:
             await self._send_command("ZoneCommand", value.value)

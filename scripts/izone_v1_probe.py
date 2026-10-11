@@ -381,11 +381,7 @@ def main() -> int:
             full=True,
         )
 
-    if args.skip_writes:
-        _print("\n(--skip-writes) Done. Please attach the log on the issue. Thanks!")
-        return 0
-
-    # --- Content-Type comparison on V2 request (shape probe) ---
+    # --- Content-Type comparison on V2 request (before skip-writes) ---
     if args.with_content_type:
         status, body, dt, err = _req(
             "POST",
@@ -399,7 +395,12 @@ def main() -> int:
             body,
             dt,
             err,
+            full=True,
         )
+
+    if args.skip_writes:
+        _print("\n(--skip-writes) Done. Please attach the log on the issue. Thanks!")
+        return 0
 
     # --- safe writes ---
     if not isinstance(settings, dict):
