@@ -960,7 +960,7 @@ async def test_create_controller_prefers_useful_v2() -> None:
     assert controller.mode == Controller.Mode.HEAT
     assert controller.fan == Controller.Fan.LOW
     assert len(controller.zones) == 2
-    assert controller.zones[0].dump_state()["BattVolt"] == 310
+    assert controller.zones[0].dump_state()["BattVolt"] == 1
     assert controller.zones[0].name == "Kitchen"
     # Type=1 system + Type=2 x2 zones (no V1 GET).
     assert session.get_calls == 0

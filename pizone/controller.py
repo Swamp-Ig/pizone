@@ -694,6 +694,69 @@ class Controller:
         return float(self._get_system_state("EcoMax")) if self.eco_lock else 30.0
 
     @property
+    def airflow_lock(self) -> bool | None:
+        """True if zone maximum and minimum airflow are locked by the installer.
+
+        ``None`` if not reported.
+        """
+        match self._system_settings.get("AirflowLock"):
+            case "on":
+                return True
+            case "onMin" | "off":
+                return False
+            case _:
+                return None
+
+    @property
+    def airflow_min_lock(self) -> bool | None:
+        """True if zone minimum airflow is locked by the installer.
+
+        Also true when :attr:`airflow_lock` locks both. ``None`` if not reported.
+        """
+        match self._system_settings.get("AirflowLock"):
+            case "on" | "onMin":
+                return True
+            case "off":
+                return False
+            case _:
+                return None
+
+    @property
+    def system_locked(self) -> bool | None:
+        """True if the system is keycode locked, or ``None`` if not reported."""
+        match self._system_settings.get("UnitLocked"):
+            case "true":
+                return True
+            case "false":
+                return False
+            case _:
+                return None
+
+    @property
+    def indoor_humidity(self) -> int | None:
+        """Indoor relative humidity (V2 ``InRh``), or ``None`` if not reported.
+
+        Not in the vendor API documentation; meaning and units are unverified.
+        """
+        return self._int_system_state("InRh")
+
+    @property
+    def indoor_tvoc(self) -> int | None:
+        """Indoor TVOC (V2 ``InTVOC``), or ``None`` if not reported.
+
+        Not in the vendor API documentation; meaning and units are unverified.
+        """
+        return self._int_system_state("InTVOC")
+
+    @property
+    def indoor_eco2(self) -> int | None:
+        """Indoor equivalent CO2 (V2 ``IneCO2``), or ``None`` if not reported.
+
+        Not in the vendor API documentation; meaning and units are unverified.
+        """
+        return self._int_system_state("IneCO2")
+
+    @property
     def ras_mode(self) -> str:
         """Return air sensor selection mode.
 
@@ -1040,6 +1103,12 @@ class Controller:
             and str(values["SysFan"]) != "error"
             and str(values["RAS"]) != "error"
         )
+
+    def _int_system_state(self, state: str) -> int | None:
+        value = self._system_settings.get(state)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
 
     def _get_system_state(self, state: str) -> DictValue:
         default = self._SYSTEM_STATE_DEFAULTS.get(state, "")

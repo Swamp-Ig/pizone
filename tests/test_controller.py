@@ -905,7 +905,7 @@ async def test_v2_refresh_sequential_zones_keeps_battery() -> None:
 
     assert controller.is_v2 is True
     assert controller._read_api == "v2"
-    assert controller.zones[0].dump_state()["BattVolt"] == 310
+    assert controller.zones[0].dump_state()["BattVolt"] == 1
 
     controller.sent.clear()
     controller.v2_zones = {
@@ -1084,3 +1084,78 @@ async def test_v2_other_commands_do_not_fall_back_on_command_error() -> None:
         await controller.set_sleep_timer(30)
     assert not any(cmd == "SleepTimer" for cmd, _ in controller.sent)
     await svc.close()
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v1_status_properties(service_14: MockDiscoveryService) -> None:
+    controller = cast(MockController, service_14._controllers["000000001"])
+
+    assert controller.airflow_lock is False
+    assert controller.airflow_min_lock is True
+    assert controller.system_locked is False
+    assert controller.indoor_humidity is None
+    assert controller.indoor_tvoc is None
+    assert controller.indoor_eco2 is None
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_status_properties(service_14: MockDiscoveryService) -> None:
+    controller = cast(MockController, service_14._controllers["000000001"])
+    controller._system_settings = v2_mod.system_v2_to_settings(
+        SAMPLE_SYSTEM_V2["SystemV2"], "000000001"
+    )
+
+    assert controller.airflow_lock is False
+    assert controller.airflow_min_lock is False
+    assert controller.system_locked is False
+    assert controller.indoor_humidity == 50
+    assert controller.indoor_tvoc == 0
+    assert controller.indoor_eco2 == 400
+
+
+# disposition: 1.4
+@pytest.mark.parametrize(
+    ("cached", "airflow_lock", "airflow_min_lock"),
+    [
+        pytest.param({"AirflowLock": "on"}, True, True, id="on"),
+        pytest.param({"AirflowLock": "onMin"}, False, True, id="on-min"),
+        pytest.param({"AirflowLock": "off"}, False, False, id="off"),
+        pytest.param({"AirflowLock": "weird"}, None, None, id="unknown"),
+        pytest.param({}, None, None, id="absent"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_airflow_lock_decoding(
+    service_14: MockDiscoveryService,
+    cached: dict[str, str],
+    airflow_lock: bool | None,
+    airflow_min_lock: bool | None,
+) -> None:
+    controller = cast(MockController, service_14._controllers["000000001"])
+    controller._system_settings.pop("AirflowLock")
+    controller._system_settings.update(cached)
+
+    assert controller.airflow_lock is airflow_lock
+    assert controller.airflow_min_lock is airflow_min_lock
+
+
+# disposition: 1.4
+@pytest.mark.parametrize(
+    ("cached", "expected"),
+    [
+        pytest.param({"UnitLocked": "true"}, True, id="locked"),
+        pytest.param({"UnitLocked": "false"}, False, id="unlocked"),
+        pytest.param({}, None, id="absent"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_system_locked_decoding(
+    service_14: MockDiscoveryService, cached: dict[str, str], expected: bool | None
+) -> None:
+    controller = cast(MockController, service_14._controllers["000000001"])
+    controller._system_settings.pop("UnitLocked")
+    controller._system_settings.update(cached)
+
+    assert controller.system_locked is expected

@@ -142,17 +142,104 @@ def test_free_air_reads_from_isave_fields(
     assert settings["FreeAir"] == expected
 
 
-def test_zones_v2_to_zone_data_preserves_battery() -> None:
-    zone = v2_mod.zones_v2_to_zone_data(cast(dict, SAMPLE_ZONES_V2[0]["ZonesV2"]))
+def test_zones_v2_to_zone_data_passes_through_v2_keys() -> None:
+    zone_v2 = SAMPLE_ZONES_V2[0]["ZonesV2"]
+    zone = v2_mod.zones_v2_to_zone_data(cast(dict, zone_v2))
     assert zone["Index"] == 0
     assert zone["Name"] == "Kitchen"
     assert zone["Type"] == "auto"
     assert zone["Mode"] == "auto"
     assert zone["SetPoint"] == 22.5
     assert abs(float(zone["Temp"]) - 21.08) < 0.001
-    assert zone["BattVolt"] == 310
-    assert zone["DmpPos"] == 45
-    assert zone["RfSignal"] == 80
+    for key in (
+        "SensType",
+        "DmpFlt",
+        "iSense",
+        "Area",
+        "Calibration",
+        "Bypass",
+        "DmpPos",
+        "RfSignal",
+        "BattVolt",
+        "SensorFault",
+        "BalanceMax",
+        "BalanceMin",
+        "DamperSkip",
+    ):
+        assert zone[key] == zone_v2[key]
+    # Normalized under V1 names, not duplicated raw.
+    assert "ZoneType" not in zone
+    assert "Setpoint" not in zone
+
+
+def test_system_v2_to_settings_passes_through_v2_keys() -> None:
+    settings = v2_mod.system_v2_to_settings(
+        cast(dict, SAMPLE_SYSTEM_V2["SystemV2"]), "000025841"
+    )
+    assert settings["FilterWarn"] == 3
+    assert settings["InRh"] == 50
+    assert settings["IneCO2"] == 400
+    assert settings["UnitOpt.RA"] == 1
+    assert settings["Temperzone.HeatSetpoint"] == 3500
+    assert settings["GasHeat.CycleFanHeat"] == 0
+    assert "UnitOpt" not in settings
+    # V1-shaped values win over raw V2 keys of the same name.
+    assert settings["Setpoint"] == "22.5"
+    assert settings["AirflowLock"] == "off"
+    assert settings["UnitLocked"] == "false"
+    assert "AirflowMinLock" not in settings
+    assert "LockStatus" not in settings
+
+
+def test_system_v2_to_settings_drops_secrets() -> None:
+    settings = v2_mod.system_v2_to_settings(
+        cast(dict, SAMPLE_SYSTEM_V2["SystemV2"]), "000025841"
+    )
+    assert "LockCode" not in settings
+    assert "Pass" not in settings
+    assert "123456" not in settings.values()
+    assert "secret" not in settings.values()
+
+
+@pytest.mark.parametrize(
+    ("airflow_lock", "airflow_min_lock", "expected"),
+    [
+        (0, 0, "off"),
+        (0, 1, "onMin"),
+        (1, 0, "on"),
+        (1, 1, "on"),
+    ],
+)
+def test_system_v2_airflow_lock_translates_to_v1(
+    airflow_lock: int, airflow_min_lock: int, expected: str
+) -> None:
+    system = {
+        **SAMPLE_SYSTEM_V2["SystemV2"],
+        "AirflowLock": airflow_lock,
+        "AirflowMinLock": airflow_min_lock,
+    }
+    settings = v2_mod.system_v2_to_settings(cast(dict, system), "000025841")
+    assert settings["AirflowLock"] == expected
+
+
+@pytest.mark.parametrize(("lock_status", "expected"), [(0, "false"), (1, "true")])
+def test_system_v2_lock_status_translates_to_v1(
+    lock_status: int, expected: str
+) -> None:
+    system = {**SAMPLE_SYSTEM_V2["SystemV2"], "LockStatus": lock_status}
+    settings = v2_mod.system_v2_to_settings(cast(dict, system), "000025841")
+    assert settings["UnitLocked"] == expected
+
+
+def test_system_v2_without_lock_keys_omits_v1_lock_keys() -> None:
+    system = {
+        key: value
+        for key, value in SAMPLE_SYSTEM_V2["SystemV2"].items()
+        if key not in ("AirflowLock", "AirflowMinLock", "LockStatus")
+    }
+    settings = v2_mod.system_v2_to_settings(cast(dict, system), "000025841")
+    assert "AirflowLock" not in settings
+    assert "UnitLocked" not in settings
 
 
 @pytest.mark.asyncio
