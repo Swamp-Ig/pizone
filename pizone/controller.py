@@ -133,12 +133,13 @@ class Controller:
         "EcoMin": "15.0",
         "EcoMax": "30.0",
         "RAS": "zones",
-        "CtrlZone": 0,
         "NoOfZones": 0,
         "NoOfConst": 0,
         "SysType": "0",
         "FanAuto": "disabled",
     }
+    # Vendor header: CtrlZone 15 means the unit setpoint, not a zone.
+    _CTRL_ZONE_UNIT = 15
 
     def __init__(
         self,
@@ -770,35 +771,43 @@ class Controller:
         return cast(str, self._get_system_state("RAS"))
 
     @property
-    def zone_ctrl(self) -> int:
-        """Zone index that currently controls the AC unit.
+    def zone_ctrl(self) -> int | None:
+        """Zone index that currently controls the AC unit, or ``None`` if not reported.
 
-        Value is interpreted in combination with :attr:`ras_mode`.
-        See :attr:`control_setpoint_owner` for the controller or zone that
-        owns the unit target.
+        Value is interpreted in combination with :attr:`ras_mode`; ``15`` means
+        the unit setpoint. See :attr:`control_setpoint_owner` for the controller
+        or zone that owns the unit target.
 
         Raises:
-            TypeError: If the cached value is missing or not numeric.
+            ValueError: If the cached value is not numeric.
 
         """
-        return int(self._get_system_state("CtrlZone"))
+        value = self._system_settings.get("CtrlZone")
+        return None if value is None else int(value)
 
     @property
     def control_setpoint_owner(self) -> Self | Zone | None:
         """Controller or zone that currently owns the unit setpoint.
 
-        Returns this controller when RAS mode is ``RAS``, when RAS mode is
-        ``master`` and :attr:`zone_ctrl` is past :attr:`zones_total` (the
-        indoor unit itself), or when any AUTO zone has no room sensor.
-        Otherwise the zone matching :attr:`zone_ctrl`, or ``None`` if that
-        index does not match a zone.
+        Returns this controller when RAS mode is ``RAS``, when :attr:`zone_ctrl`
+        is ``15`` (the unit setpoint), when RAS mode is ``master`` and
+        :attr:`zone_ctrl` is past :attr:`zones_total` (the indoor unit itself),
+        or when any AUTO zone has no room sensor. Otherwise the zone matching
+        :attr:`zone_ctrl`, or ``None`` if that index does not match a zone or
+        :attr:`zone_ctrl` is not reported.
 
         CONST/OPCL zones never have a room sensor; only a missing AUTO CTS
         forces unit control.
         """
+        zone_ctrl = self.zone_ctrl
         if (
             self.ras_mode == "RAS"
-            or (self.ras_mode == "master" and self.zone_ctrl > self.zones_total)
+            or zone_ctrl == self._CTRL_ZONE_UNIT
+            or (
+                self.ras_mode == "master"
+                and zone_ctrl is not None
+                and zone_ctrl > self.zones_total
+            )
             or any(
                 zone.type is Zone.Type.AUTO and zone.temp_current is None
                 for zone in self.zones
@@ -806,7 +815,7 @@ class Controller:
         ):
             return self
         return next(
-            (zone for zone in self.zones if zone.index == self.zone_ctrl),
+            (zone for zone in self.zones if zone.index == zone_ctrl),
             None,
         )
 

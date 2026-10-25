@@ -191,6 +191,16 @@ def test_system_v2_to_settings_passes_through_v2_keys() -> None:
     assert "LockStatus" not in settings
 
 
+def test_system_v2_missing_ctrlzone_stays_missing() -> None:
+    system = {
+        key: value
+        for key, value in SAMPLE_SYSTEM_V2["SystemV2"].items()
+        if key != "CtrlZone"
+    }
+    settings = v2_mod.system_v2_to_settings(cast(dict, system), "000025841")
+    assert "CtrlZone" not in settings
+
+
 def test_system_v2_to_settings_drops_secrets() -> None:
     settings = v2_mod.system_v2_to_settings(
         cast(dict, SAMPLE_SYSTEM_V2["SystemV2"]), "000025841"

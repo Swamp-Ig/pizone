@@ -358,7 +358,6 @@ def system_v2_to_settings(
         "Setpoint": temp_to_v1_str(system_v2.get("Setpoint")),
         "Temp": temp_to_v1_str(system_v2.get("Temp")),
         "RAS": ras_val,
-        "CtrlZone": int(system_v2.get("CtrlZone") or 0),
         "Tag1": str(system_v2.get("Tag1") or ""),
         "Tag2": str(system_v2.get("Tag2") or ""),
         "Warnings": str(system_v2.get("Warnings") or "none"),
