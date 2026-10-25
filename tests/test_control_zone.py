@@ -31,6 +31,7 @@ async def test_zones_mode_uses_ctrlzone_despite_const_temp_zero(
     [
         pytest.param("RAS", 1, False, "self", 23.5, id="ras"),
         pytest.param("master", 13, False, "self", 23.5, id="master_unit"),
+        pytest.param("zones", 15, False, "self", 23.5, id="unit_sentinel"),
         pytest.param("master", 1, False, 1, 23.5, id="master_zone"),
         pytest.param("zones", 1, True, "self", 23.5, id="auto_missing_cts"),
         pytest.param("zones", 99, False, None, None, id="unmatched_zone"),
@@ -64,3 +65,25 @@ async def test_control_zone_ownership(
         assert controller.control_setpoint is None
     else:
         assert controller.control_setpoint == pytest.approx(setpoint)
+
+
+@pytest.mark.parametrize(
+    ("ras_mode", "owns"),
+    [
+        pytest.param("RAS", True, id="ras"),
+        pytest.param("master", False, id="master"),
+        pytest.param("zones", False, id="zones"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_missing_ctrlzone_has_no_zone_owner(
+    service: MockDiscoveryService, ras_mode: str, owns: bool
+) -> None:
+    """A missing CtrlZone must not fall back to zone 0."""
+    controller = cast(MockController, service._controllers["000000001"])
+    controller._system_settings["RAS"] = ras_mode
+    del controller._system_settings["CtrlZone"]
+
+    assert controller.zone_ctrl is None
+    assert (controller.control_setpoint_owner is controller) is owns
+    assert controller.control_setpoint_owner is not controller.zones[0]

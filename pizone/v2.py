@@ -53,6 +53,12 @@ _FAN_AUTO_TYPE = {
     3: "4-speed",
 }
 
+# V2 keys consumed under a different V1 name; everything else passes through.
+_ZONE_V2_NORMALIZED = frozenset({"ZoneType", "Setpoint"})
+_SYSTEM_V2_NORMALIZED = frozenset({"AirflowLock", "AirflowMinLock", "LockStatus"})
+# Never cache or dump these.
+_SYSTEM_V2_SECRETS = frozenset({"LockCode", "Pass"})
+
 
 class SysOnWire(IntEnum):
     """ASH SysOn_e."""
@@ -261,6 +267,39 @@ def _free_air_from_system(system_v2: dict[str, Any]) -> str:
     return "on" if int(system_v2.get("iSaveOn") or 0) else "off"
 
 
+def _locks_from_system(system_v2: dict[str, Any]) -> dict[str, str]:
+    """Translate V2 lock flags into V1 AirflowLock / UnitLocked values."""
+    locks: dict[str, str] = {}
+    if "AirflowLock" in system_v2 or "AirflowMinLock" in system_v2:
+        if int(system_v2.get("AirflowLock") or 0):
+            locks["AirflowLock"] = "on"
+        elif int(system_v2.get("AirflowMinLock") or 0):
+            locks["AirflowLock"] = "onMin"
+        else:
+            locks["AirflowLock"] = "off"
+    if "LockStatus" in system_v2:
+        locks["UnitLocked"] = "true" if int(system_v2["LockStatus"]) else "false"
+    return locks
+
+
+def _pass_through(
+    data: dict[str, str | int | float],
+    source: dict[str, Any],
+    *,
+    skip: frozenset[str],
+    prefix: str = "",
+) -> None:
+    """Copy scalar keys not already in *data*; flatten nested dicts to ``A.B``."""
+    for key, value in source.items():
+        name = f"{prefix}{key}"
+        if key in skip or name in data:
+            continue
+        if isinstance(value, dict):
+            _pass_through(data, value, skip=frozenset(), prefix=f"{name}.")
+        elif isinstance(value, (str, int, float)):
+            data[name] = value
+
+
 def system_v2_to_settings(
     system_v2: dict[str, Any], uid: str
 ) -> dict[str, str | int | float]:
@@ -309,7 +348,7 @@ def system_v2_to_settings(
 
     free_air = _free_air_from_system(system_v2)
 
-    return {
+    data: dict[str, str | int | float] = {
         "AirStreamDeviceUId": uid,
         "SysOn": on_val,
         "SysMode": mode_val,
@@ -319,7 +358,6 @@ def system_v2_to_settings(
         "Setpoint": temp_to_v1_str(system_v2.get("Setpoint")),
         "Temp": temp_to_v1_str(system_v2.get("Temp")),
         "RAS": ras_val,
-        "CtrlZone": int(system_v2.get("CtrlZone") or 0),
         "Tag1": str(system_v2.get("Tag1") or ""),
         "Tag2": str(system_v2.get("Tag2") or ""),
         "Warnings": str(system_v2.get("Warnings") or "none"),
@@ -333,6 +371,9 @@ def system_v2_to_settings(
         "FreeAir": free_air,
         "FanAuto": fan_auto,
     }
+    data.update(_locks_from_system(system_v2))
+    _pass_through(data, system_v2, skip=_SYSTEM_V2_NORMALIZED | _SYSTEM_V2_SECRETS)
+    return data
 
 
 def zones_v2_to_zone_data(zone_v2: dict[str, Any]) -> dict[str, str | int | float]:
@@ -368,19 +409,7 @@ def zones_v2_to_zone_data(zone_v2: dict[str, Any]) -> dict[str, str | int | floa
         "ConstA": int(zone_v2.get("ConstA") or 0),
         "Master": int(zone_v2.get("Master") or 0),
     }
-    for key in (
-        "DmpPos",
-        "RfSignal",
-        "BattVolt",
-        "SensorFault",
-        "DmpFlt",
-        "Bypass",
-        "SensType",
-        "Area",
-        "Rh",
-    ):
-        if key in zone_v2:
-            data[key] = zone_v2[key]
+    _pass_through(data, zone_v2, skip=_ZONE_V2_NORMALIZED)
     return data
 
 

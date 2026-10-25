@@ -3,6 +3,7 @@
 Properties for reading and setting zone data.
 """
 
+import builtins
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
@@ -53,6 +54,31 @@ class Zone:
         OPEN = "open"
         CLOSE = "close"
         AUTO = "auto"
+
+    class SensorType(Enum):
+        """Zone temperature sensor type (V2 ``SensType``)."""
+
+        CCTS = 0
+        CSM = 1
+        ISENSE = 2
+        WIRELESS = 3
+        WIRED = 4
+        NONE = 255
+
+    class RfSignal(Enum):
+        """Wireless zone sensor RF signal level (V2 ``RfSignal``)."""
+
+        FULL = 0
+        HALF = 1
+        QUARTER = 2
+        NONE = 3
+
+    class BatteryLevel(Enum):
+        """Wireless zone sensor battery level (V2 ``BattVolt``)."""
+
+        FULL = 0
+        HALF = 1
+        EMPTY = 2
 
     DictValue = str | int | float
     ZoneData = dict[str, DictValue]
@@ -116,6 +142,51 @@ class Zone:
     def airflow_min(self) -> int:
         """Minimum allowed airflow for the zone as a percent."""
         return cast(int, self._get_zone_state("MinAir"))
+
+    @property
+    def damper_position(self) -> int | None:
+        """Current damper position as a percent, or ``None`` if not reported.
+
+        V2 only. Bridges without damper position feedback report a constant 50.
+        """
+        return self._int_state("DmpPos")
+
+    @property
+    def damper_fault(self) -> bool | None:
+        """True if the zone damper motor reports a fault, or ``None`` if not reported."""
+        return self._bool_state("DmpFlt")
+
+    @property
+    def sensor_fault(self) -> bool | None:
+        """True if the zone sensor reports a fault, or ``None`` if not reported.
+
+        V2 only.
+        """
+        return self._bool_state("SensorFault")
+
+    @property
+    def rf_signal(self) -> Zone.RfSignal | None:
+        """Wireless sensor RF signal level, or ``None`` if not reported.
+
+        V2 only. Only meaningful for wireless :attr:`sensor_type` zones.
+        """
+        return self._enum_state(Zone.RfSignal, "RfSignal")
+
+    @property
+    def battery_level(self) -> Zone.BatteryLevel | None:
+        """Wireless sensor battery level, or ``None`` if not reported.
+
+        V2 only. Only meaningful for wireless :attr:`sensor_type` zones.
+        """
+        return self._enum_state(Zone.BatteryLevel, "BattVolt")
+
+    @property
+    def sensor_type(self) -> Zone.SensorType | None:
+        """Zone temperature sensor type, or ``None`` if not reported.
+
+        V2 only.
+        """
+        return self._enum_state(Zone.SensorType, "SensType")
 
     async def set_airflow_min(self, value: int) -> None:
         """Change the zone minimum airflow in 5% increments.
@@ -223,6 +294,28 @@ class Zone:
 
     def _get_zone_state(self, state: str) -> DictValue:
         return self._zone_data[state]
+
+    def _int_state(self, state: str) -> int | None:
+        value = self._zone_data.get(state)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    def _bool_state(self, state: str) -> bool | None:
+        # V1 sends "true"/"false"; V2 sends 0/1.
+        match self._zone_data.get(state):
+            case "true" | 1:
+                return True
+            case "false" | 0:
+                return False
+            case _:
+                return None
+
+    def _enum_state[E: Enum](self, enum: builtins.type[E], state: str) -> E | None:
+        try:
+            return enum(self._zone_data[state])
+        except KeyError, ValueError:
+            return None
 
     async def _send_command(self, command: str, data: str | float) -> None:
         """Send a zone command via the parent controller.

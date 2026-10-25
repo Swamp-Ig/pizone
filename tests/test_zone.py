@@ -295,3 +295,81 @@ async def test_update_zone_index_mismatch(service: MockDiscoveryService) -> None
 
     with pytest.raises(AttributeError, match="Can't change index"):
         zone._update_zone(bad_data, notify=False)
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_zone_status_properties(v2_controller: MockController) -> None:
+    zone = v2_controller.zones[0]
+
+    assert zone.damper_position == 45
+    assert zone.damper_fault is False
+    assert zone.sensor_fault is False
+    assert zone.rf_signal is Zone.RfSignal.HALF
+    assert zone.battery_level is Zone.BatteryLevel.HALF
+    assert zone.sensor_type is Zone.SensorType.WIRELESS
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v2_zone_status_properties_absent(v2_controller: MockController) -> None:
+    zone = v2_controller.zones[1]
+
+    assert zone.damper_position is None
+    assert zone.damper_fault is None
+    assert zone.sensor_fault is None
+    assert zone.rf_signal is None
+    assert zone.battery_level is None
+    assert zone.sensor_type is None
+
+
+# disposition: 1.4
+@pytest.mark.asyncio
+async def test_v1_zone_status_properties(service_14: MockDiscoveryService) -> None:
+    zone = cast(MockController, service_14._controllers["000000001"]).zones[0]
+
+    assert zone.damper_fault is False
+    assert zone.damper_position is None
+    assert zone.sensor_fault is None
+    assert zone.rf_signal is None
+    assert zone.battery_level is None
+    assert zone.sensor_type is None
+
+
+# disposition: 1.4
+@pytest.mark.parametrize(
+    ("key", "raw", "attr", "expected"),
+    [
+        pytest.param("DmpPos", 0, "damper_position", 0, id="position-zero"),
+        pytest.param("DmpPos", "50", "damper_position", None, id="position-str"),
+        pytest.param("DmpPos", True, "damper_position", None, id="position-bool"),
+        pytest.param("DmpFlt", "true", "damper_fault", True, id="fault-v1-true"),
+        pytest.param("DmpFlt", "false", "damper_fault", False, id="fault-v1-false"),
+        pytest.param("DmpFlt", 1, "damper_fault", True, id="fault-v2-true"),
+        pytest.param("DmpFlt", 0, "damper_fault", False, id="fault-v2-false"),
+        pytest.param("DmpFlt", "maybe", "damper_fault", None, id="fault-unknown"),
+        pytest.param("SensorFault", 1, "sensor_fault", True, id="sensor-fault"),
+        pytest.param("RfSignal", 3, "rf_signal", Zone.RfSignal.NONE, id="rf-none"),
+        pytest.param("RfSignal", 7, "rf_signal", None, id="rf-unknown"),
+        pytest.param(
+            "BattVolt", 2, "battery_level", Zone.BatteryLevel.EMPTY, id="batt-empty"
+        ),
+        pytest.param("BattVolt", 310, "battery_level", None, id="batt-unknown"),
+        pytest.param(
+            "SensType", 255, "sensor_type", Zone.SensorType.NONE, id="sensor-none"
+        ),
+        pytest.param("SensType", 99, "sensor_type", None, id="sensor-unknown"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_zone_status_property_decoding(
+    v2_controller: MockController,
+    key: str,
+    raw: str | int,
+    attr: str,
+    expected: object,
+) -> None:
+    zone = v2_controller.zones[0]
+    zone._zone_data[key] = raw
+
+    assert getattr(zone, attr) == expected
