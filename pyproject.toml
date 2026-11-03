@@ -46,8 +46,8 @@ test = [
 ]
 dev = [
   { include-group = "test" },
-  "ruff>=0.15.20",
-  "mypy",
+  "ruff>=0.17.3",
+  "mypy>=2.4.1",
   "build",
 ]
 
@@ -80,7 +80,7 @@ ignore_errors = true
 # Ruff config broadly aligned with Home Assistant core (select/ignore + format).
 # HA-only plugins/import aliases are omitted; known-first-party is pizone.
 [tool.ruff]
-required-version = ">=0.15.20"
+required-version = ">=0.17.3"
 target-version = "py314"
 src = ["pizone", "tests"]
 
@@ -171,6 +171,7 @@ ignore = [
   "PLR0912",
   "PLR0913",
   "PLR0915",
+  "PLR0917",
   "PLR2004",
   "PLW0108",
   "PLW1641",
