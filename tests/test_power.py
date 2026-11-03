@@ -1,28 +1,13 @@
 """Tests for iPower configuration and status handling."""
 
-# disposition: 1.4 | deprecate  (untagged = keep)
-#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
-#   1.4       — new consumer-driven discovery / refresh API
-#   deprecate — legacy track; grep and delete when dual-track ends
-#               (sticky within a function until the next disposition tag).
-
 import json
 from typing import Any, cast
 
 import pytest
 
 from pizone import BatteryLevel, Controller, Power
-from pizone.discovery import Listener
 
 from .power_data import POWER_CONFIG, POWER_STATUS
-
-
-class _PowerListener(Listener):
-    def __init__(self) -> None:
-        self.power_updates = 0
-
-    def power_update(self, _controller: Controller) -> None:
-        self.power_updates += 1
 
 
 class MockPowerController:
@@ -33,12 +18,10 @@ class MockPowerController:
         responses: dict[int, dict[str, object]],
         *,
         bridge_connected: bool = True,
-        listener: _PowerListener | None = None,
     ) -> None:
         self._responses = responses
         self.sent: list[tuple[str, dict[str, Any]]] = []
         self._bridge_ok = bridge_connected
-        self._event_coordinator = listener or _PowerListener()
 
     @property
     def bridge_connected(self) -> bool:
@@ -147,13 +130,11 @@ async def test_power_connected_false_when_bridge_down() -> None:
 
 @pytest.mark.asyncio
 async def test_power_connected_restored_on_recovery() -> None:
-    listener = _PowerListener()
     controller = MockPowerController(
         {
             1: {"PowerMonitorConfig": POWER_CONFIG},
             2: {"PowerMonitorStatus": POWER_STATUS},
         },
-        listener=listener,
     )
     power = Power(cast(Controller, controller))
     await power.init()
@@ -163,10 +144,8 @@ async def test_power_connected_restored_on_recovery() -> None:
     with pytest.raises(ConnectionError):
         await power.refresh()
     assert power.connected is False
-    assert listener.power_updates == 1
 
     controller._bridge_ok = True
     controller._responses = {2: {"PowerMonitorStatus": POWER_STATUS}}
     await power.refresh()
     assert power.connected is True
-    assert listener.power_updates == 2

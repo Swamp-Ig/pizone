@@ -1,11 +1,5 @@
 """Tests for the pizone 1.4 discovery API."""
 
-# disposition: 1.4 | deprecate  (untagged = keep)
-#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
-#   1.4       — new consumer-driven discovery / refresh API
-#   deprecate — legacy track; grep and delete when dual-track ends
-#               (sticky within a function until the next disposition tag).
-
 import asyncio
 import errno
 import sys
@@ -58,7 +52,6 @@ def _probe_result(uid: str, host: str) -> ControllerProbe:
     )
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_discovery_singleton() -> None:
     """create_discovery is one-shot and close clears the global."""
@@ -75,7 +68,6 @@ async def test_create_discovery_singleton() -> None:
     assert discovery_module._active_discovery is None
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_close_then_immediate_create_discovery_rebinds() -> None:
     """close() must release UDP :7005 before returning so a new create can bind.
@@ -106,7 +98,6 @@ async def test_close_then_immediate_create_discovery_rebinds() -> None:
         await session.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_owned_session_close_still_needs_udp_teardown_wait() -> None:
     """Owned-session await must not be treated as sufficient UDP teardown.
@@ -148,7 +139,6 @@ async def test_owned_session_close_still_needs_udp_teardown_wait() -> None:
             await leftover.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_discovery_failed_start_allows_retry() -> None:
     """Failed start_discovery must not leave the process singleton set.
@@ -184,7 +174,6 @@ async def test_create_discovery_failed_start_allows_retry() -> None:
             await leftover.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_failed_start_holds_singleton_until_close_finishes() -> None:
     """Overlapping create during failed-start cleanup must hit already-created.
@@ -233,10 +222,9 @@ async def test_failed_start_holds_singleton_until_close_finishes() -> None:
             await leftover.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -246,10 +234,9 @@ async def test_discover_by_host() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_unreachable() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_error=OSError("unreachable")),
@@ -259,7 +246,6 @@ async def test_discover_by_host_unreachable() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response",
@@ -298,19 +284,18 @@ async def test_discover_by_host_malformed_body_returns_none(
     response: FakeHttpResponse,
 ) -> None:
     """Manual host widens _probe input; content failures must not raise."""
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(ClientSession, FakeHttpSession(get_response=response))
     endpoint = await service.discover_by_host("10.0.0.90")
     assert endpoint is None
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_ok_suffix_json() -> None:
     """Bridge quirk: JSON body with a trailing {OK} still probes successfully."""
     body = '{"AirStreamDeviceUId":"000025841","SysOn":"on"}{OK}'
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(
@@ -322,10 +307,9 @@ async def test_discover_by_host_ok_suffix_json() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_uses_known_cache() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -340,10 +324,9 @@ async def test_discover_by_host_uses_known_cache() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_raises_if_controller_exists() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -358,10 +341,9 @@ async def test_discover_by_host_raises_if_controller_exists() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_uid() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -383,10 +365,9 @@ async def test_discover_by_uid() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_uid_raises_if_controller_exists() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -402,10 +383,9 @@ async def test_discover_by_uid_raises_if_controller_exists() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_invokes_callback() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -430,11 +410,10 @@ async def test_discover_all_invokes_callback() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_notifies_known_without_new_datagram() -> None:
     """User scan notifies once for already-known same-host (no wait-window ASPort)."""
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -456,11 +435,10 @@ async def test_discover_all_notifies_known_without_new_datagram() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_dedupes_udp_and_verify_notify() -> None:
     """ASPort during wait + verify must not double-fire on_endpoint_discovered."""
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -484,10 +462,9 @@ async def test_discover_all_dedupes_udp_and_verify_notify() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_passive_asport_notifies_new_only() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
     datagram = b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone"
@@ -499,10 +476,9 @@ async def test_passive_asport_notifies_new_only() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_passive_asport_notifies_on_host_change() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
 
@@ -523,10 +499,9 @@ async def test_passive_asport_notifies_on_host_change() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -550,10 +525,9 @@ async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_claimed_asport_same_host_silent() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -576,10 +550,9 @@ async def test_claimed_asport_same_host_silent() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_close_does_not_fire_on_endpoint_discovered() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -594,10 +567,9 @@ async def test_close_does_not_fire_on_endpoint_discovered() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_changed_datagrams_ignored_on_14_path() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
 
@@ -610,11 +582,10 @@ async def test_changed_datagrams_ignored_on_14_path() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_calls_are_serialized() -> None:
     """Concurrent discover_all calls must not overlap shared scratch state."""
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -649,10 +620,9 @@ async def test_discover_calls_are_serialized() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_excludes_created_controllers() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -672,10 +642,9 @@ async def test_discover_all_excludes_created_controllers() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_includes_closed_controllers() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -695,10 +664,9 @@ async def test_discover_all_includes_closed_controllers() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_scan_sends_broadcast() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     await service.start_discovery()
     with patch.object(service, "_send_broadcasts") as send_broadcasts:
         await service.scan()
@@ -706,10 +674,9 @@ async def test_scan_sends_broadcast() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_success() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     session = FakeHttpSession(get_response=_system_settings_response("000025841"))
     service._session = cast(ClientSession, session)
     controller = await service.create_controller("000025841", "10.0.0.90")
@@ -729,10 +696,9 @@ async def test_create_controller_success() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_raises_if_uid_exists() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -743,10 +709,9 @@ async def test_create_controller_raises_if_uid_exists() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_address_fallback() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
 
     responses = {
         "10.0.0.1": _system_settings_response("000099999"),
@@ -775,10 +740,9 @@ async def test_create_controller_address_fallback() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_address_changed_after_return() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -820,10 +784,9 @@ async def test_create_controller_address_changed_after_return() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_no_retry_on_command_error() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
@@ -843,12 +806,11 @@ async def test_create_controller_no_retry_on_command_error() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_udp_ignores_placeholder_uid() -> None:
     """Passive ASPort for the unpaired placeholder must not cache or notify."""
     discovered: list[ControllerEndpoint] = []
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._on_endpoint_discovered = discovered.append
     service._process_datagram(
         b"ASPort_12107,Mac_000000000,IP_10.0.0.111,iZone",
@@ -859,24 +821,9 @@ async def test_udp_ignores_placeholder_uid() -> None:
     await service.close()
 
 
-# disposition: deprecate
-@pytest.mark.asyncio
-async def test_legacy_udp_ignores_placeholder_uid() -> None:
-    """Legacy pathway must not initialize a controller for the placeholder UID."""
-    service = MockDiscoveryService(legacy_pathway=True)
-    service._process_datagram(
-        b"ASPort_12107,Mac_000000000,IP_10.0.0.111,iZone",
-        ("10.0.0.111", 12107),
-    )
-    await asyncio.sleep(0)
-    assert service._controllers == {}
-    await service.close()
-
-
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_uid_placeholder_raises_without_io() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     scan = AsyncMock()
     with (
         patch.object(service, "scan", scan),
@@ -888,10 +835,9 @@ async def test_discover_by_uid_placeholder_raises_without_io() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_placeholder_raises_without_io() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     probe = AsyncMock()
     with (
         patch.object(service, "_probe", probe),
@@ -902,10 +848,9 @@ async def test_create_controller_placeholder_raises_without_io() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_by_host_placeholder_raises_without_cache() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response(PLACEHOLDER_DEVICE_UID)),
@@ -916,11 +861,10 @@ async def test_discover_by_host_placeholder_raises_without_cache() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_discover_all_omits_placeholder_uid() -> None:
     discovered: list[ControllerEndpoint] = []
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._on_endpoint_discovered = discovered.append
     service._session = cast(
         ClientSession,
@@ -944,11 +888,10 @@ async def test_discover_all_omits_placeholder_uid() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_prefers_useful_v2() -> None:
     """Useful SystemV2 wins even when V1 SystemSettings would also work."""
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     session = v2_routing_session(
         use_content_type=False,
         get_response=_system_settings_response("000025841"),
@@ -968,10 +911,9 @@ async def test_create_controller_prefers_useful_v2() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_v2_with_content_type() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     session = v2_routing_session(use_content_type=True)
     service._session = cast(ClientSession, session)
     controller = await service.create_controller("000025841", "10.0.0.90")
@@ -980,10 +922,9 @@ async def test_create_controller_v2_with_content_type() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_falls_back_to_v1_when_v2_useless() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     session = FakeHttpSession(
         get_response=_system_settings_response("000025841"),
         post_response=FakeHttpResponse(200, body="{ERROR}"),
@@ -996,10 +937,9 @@ async def test_create_controller_falls_back_to_v1_when_v2_useless() -> None:
     await service.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_create_controller_empty_v1_and_v2_error_raises() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     session = FakeHttpSession(
         get_response=FakeHttpResponse(200, body=""),
         post_response=FakeHttpResponse(200, body="{ERROR}"),

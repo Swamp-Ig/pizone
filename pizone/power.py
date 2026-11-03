@@ -277,10 +277,7 @@ class Power:
         return payload
 
     def _set_power_ok(self, ok: bool) -> None:
-        if self._power_ok == ok:
-            return
         self._power_ok = ok
-        self._controller._event_coordinator.power_update(self._controller)  # noqa: SLF001
 
     def dump_state(self) -> dict[str, Any]:
         """Return a JSON-friendly snapshot of cached power monitor state."""

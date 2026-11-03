@@ -4,7 +4,6 @@ import asyncio
 from asyncio import (
     BaseTransport,
     CancelledError,
-    Condition,
     DatagramProtocol,
     DatagramTransport,
     Event,
@@ -31,30 +30,20 @@ from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
 from .exceptions import ControllerAlreadyClaimedError, raise_if_placeholder_uid
 from .types import ControllerEndpoint, ControllerProbe
-from .zone import Zone
-
-# disposition: 1.4 | deprecate  (untagged = keep)
-#   keep      — default; no tag required. Shared dual-track code.
-#   1.4       — new consumer-driven discovery API
-#   deprecate — legacy track; grep and delete when dual-track ends
-#               (ship on 1.3.x until then). Sticky within a method until
-#               the next disposition tag.
 
 DISCOVERY_MSG = b"IASD"  # cspell:disable-line
 DISCOVERY_PORT = 12107
 UPDATE_PORT = 7005
 
-# CHANGED_* — documented UDP protocol; recognize and ignore (no refresh). Dual-track.
+# CHANGED_* — documented UDP push notifications; recognized and ignored (no refresh).
 CHANGED_SYSTEM = b"iZoneChanged_System"
 CHANGED_ZONES = b"iZoneChanged_Zones"
 CHANGED_SCHEDULES = b"iZoneChanged_Schedules"
 
-# disposition: deprecate — internal _scan_loop timing (removed in 1.4e)
-DISCOVERY_SLEEP = 5.0 * 60.0
-DISCOVERY_RESCAN = 20.0
+# Minimum gap between cooled scans nudged by HTTP transport failures.
 RESCAN_COOLDOWN = 5.0
 
-# disposition: 1.4 — active discover_by_uid / discover_all wait
+# Active discover_by_uid / discover_all wait for ASPort replies.
 SCAN_TIMEOUT = 5.0
 TRANSPORT_CLOSE_TIMEOUT = 1.0
 
@@ -63,12 +52,12 @@ UDP_REPLY_BUFFER_SIZE = 20
 
 _LOG = logging.getLogger("pizone.discovery")
 
-# disposition: 1.4 — create_discovery() singleton guard
+# create_discovery() singleton guard.
 _active_discovery: DiscoveryService | None = None
 
 
 class LogExceptions:
-    """Context manager that logs and suppresses listener exceptions."""
+    """Context manager that logs and suppresses consumer callback exceptions."""
 
     def __init__(self, func: str) -> None:
         self.func = func
@@ -84,53 +73,21 @@ class LogExceptions:
     ) -> bool:
         if exc_type:
             _LOG.error(
-                "Exception ignored when calling listener %s", self.func, exc_info=True
+                "Exception ignored when calling callback %s", self.func, exc_info=True
             )
         return True
-
-
-# disposition: deprecate
-class Listener:
-    """Base class for iZone controller event listeners."""
-
-    def controller_discovered(self, ctrl: Controller) -> None:
-        """Handle a discovered controller.
-
-        Also called for every existing controller when a new listener is
-        registered.
-        """
-
-    def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
-        """Handle a lost controller connection.
-
-        Args:
-            ex: The exception that caused the disconnect.
-
-        """
-
-    def controller_reconnected(self, ctrl: Controller) -> None:
-        """Handle a controller reconnect after a connection failure."""
-
-    def controller_update(self, ctrl: Controller) -> None:
-        """Handle refreshed controller system data."""
-
-    def zone_update(self, ctrl: Controller, zone: Zone) -> None:
-        """Handle refreshed zone data."""
-
-    def power_update(self, ctrl: Controller) -> None:
-        """Handle refreshed power monitor data."""
 
 
 class DiscoveryService:
     """UDP discovery, endpoint registry, and controller factory.
 
-    Obtain via :func:`create_discovery` (1.4) or :func:`discovery` (legacy).
-    Direct construction is for tests and subclasses.
+    Obtain via :func:`create_discovery`. Direct construction is for tests and
+    subclasses.
     """
 
     _controller_cls: type[Controller] = Controller
 
-    def __init__(  # noqa: C901
+    def __init__(
         self,
         session: ClientSession | None = None,
         *,
@@ -138,8 +95,7 @@ class DiscoveryService:
     ) -> None:
         """Create a discovery service.
 
-        Prefer :func:`create_discovery` or :func:`discovery` instead of calling
-        this directly.
+        Prefer :func:`create_discovery` instead of calling this directly.
 
         Call :meth:`start_discovery` or use the service as an async context
         manager to begin scanning.
@@ -152,22 +108,16 @@ class DiscoveryService:
 
         """
         self._close_task: Task[Any] | None = None
-        # Both tracks: True = legacy discovery()/Listener path.
-        self._legacy_pathway = False
 
-        # disposition: deprecate — legacy listener/fetch registry
-        self._controllers: dict[str, Controller] = {}
-        self._pending_init: set[str] = set()
-        self._disconnected: set[str] = set()
-        self._listeners: list[Listener] = []
-
-        # disposition: 1.4 — endpoint ownership (UID is identity; host may move)
+        # Endpoint ownership (UID is identity; host may move).
         # _known_endpoints: heard about, unclaimed (UDP and/or discover_by_*).
         # _claimed_endpoints: create_controller claimed; removed on Controller.close().
         # No stale/disappear tracking — notify is unverified UDP; create re-probes.
         self._on_endpoint_discovered = on_endpoint_discovered
         self._known_endpoints: dict[str, ControllerEndpoint] = {}
         self._claimed_endpoints: dict[str, ControllerEndpoint] = {}
+        # Live controllers for claimed UIDs (address-change routing).
+        self._controllers: dict[str, Controller] = {}
         # Ring buffer of recent inbound UDP datagrams (diagnostics).
         self._recent_udp: deque[dict[str, Any]] = deque(maxlen=UDP_REPLY_BUFFER_SIZE)
         self._scan_collector: dict[str, str] | None = None
@@ -183,65 +133,9 @@ class DiscoveryService:
         # Set by connection_lost once the event loop has released the socket.
         self._transport_released = Event()
 
-        # disposition: deprecate
-        self._scan_condition = Condition()
         self._last_rescan_time: float = 0.0
 
         self._tasks: list[Task[Any]] = []
-
-        _srv = self
-
-        # disposition: deprecate
-        class _EventCoordinator(Listener):
-            """Fan-out adapter that dispatches controller and zone events to listeners."""
-
-            def controller_discovered(self, ctrl: Controller) -> None:
-                _LOG.info(
-                    "New controller found: id=%s ip=%s", ctrl.device_uid, ctrl.device_ip
-                )
-                for listener in _srv._listeners:
-                    with LogExceptions("controller_discovered"):
-                        listener.controller_discovered(ctrl)
-
-            def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
-                _LOG.warning(
-                    "Connection to controller lost: id=%s ip=%s",
-                    ctrl.device_uid,
-                    ctrl.device_ip,
-                )
-                _srv._disconnected.add(ctrl.device_uid)
-                _srv.create_task(_srv._rescan())
-                for listener in _srv._listeners:
-                    with LogExceptions("controller_disconnected"):
-                        listener.controller_disconnected(ctrl, ex)
-
-            def controller_reconnected(self, ctrl: Controller) -> None:
-                _LOG.warning(
-                    "Controller reconnected: id=%s ip=%s",
-                    ctrl.device_uid,
-                    ctrl.device_ip,
-                )
-                _srv._disconnected.discard(ctrl.device_uid)
-                for listener in _srv._listeners:
-                    with LogExceptions("controller_reconnected"):
-                        listener.controller_reconnected(ctrl)
-
-            def controller_update(self, ctrl: Controller) -> None:
-                for listener in _srv._listeners:
-                    with LogExceptions("controller_update"):
-                        listener.controller_update(ctrl)
-
-            def zone_update(self, ctrl: Controller, zone: Zone) -> None:
-                for listener in _srv._listeners:
-                    with LogExceptions("zone_update"):
-                        listener.zone_update(ctrl, zone)
-
-            def power_update(self, ctrl: Controller) -> None:
-                for listener in _srv._listeners:
-                    with LogExceptions("power_update"):
-                        listener.power_update(ctrl)
-
-        self._event_coordinator: Listener = _EventCoordinator()
 
     async def __aenter__(self) -> Self:
         await self.start_discovery()
@@ -271,33 +165,8 @@ class DiscoveryService:
         task.add_done_callback(self._task_done_callback)
         return task
 
-    # disposition: deprecate
-    def add_listener(self, listener: Listener) -> None:
-        """Register a listener for controller and zone events.
-
-        All existing controllers are passed to the listener immediately via
-        :meth:`~pizone.discovery.Listener.controller_discovered`.
-        """
-        self._listeners.append(listener)
-
-        def callback() -> None:
-            for controller in self._controllers.values():
-                listener.controller_discovered(controller)
-
-        asyncio.get_running_loop().call_soon(callback)
-
-    # disposition: deprecate
-    def remove_listener(self, listener: Listener) -> None:
-        """Remove a previously registered listener.
-
-        Raises:
-            ValueError: If *listener* is not registered.
-
-        """
-        self._listeners.remove(listener)
-
     async def start_discovery(self) -> None:
-        """Start the UDP discovery protocol and scan loop.
+        """Start the UDP discovery protocol.
 
         Raises:
             OSError: If the discovery socket cannot be created or bound.
@@ -336,9 +205,6 @@ class DiscoveryService:
         assert not self._transport, "Another connection made"
 
         self._transport = transport
-        # disposition: deprecate — scan loop only on legacy pathway (removed in 1.4e)
-        if self._legacy_pathway:
-            self.create_task(self._scan_loop())
 
     def _get_broadcasts(self) -> Iterator[str]:
         for adapter in ifaddr.get_adapters():
@@ -357,46 +223,12 @@ class DiscoveryService:
             _LOG.debug("Sending discovery message to addr %s", broadcast)
             transport.sendto(DISCOVERY_MSG, (broadcast, DISCOVERY_PORT))
 
-    # disposition: deprecate
-    async def _scan_loop(self) -> None:
-        assert self._transport, "Should be impossible"
-
-        while True:
-            self._send_broadcasts()
-
-            try:
-                async with asyncio.timeout(
-                    DISCOVERY_RESCAN if self._disconnected else DISCOVERY_SLEEP
-                ):
-                    async with self._scan_condition:
-                        await self._scan_condition.wait()
-            except TimeoutError:
-                pass
-
-            if self._close_task:
-                return
-
-    # disposition: deprecate
-    async def _rescan(self) -> None:
-        async with self._scan_condition:
-            self._scan_condition.notify()
-
-    # disposition: deprecate
-    async def _maybe_rescan(self) -> None:
-        """Trigger a rescan only if outside the cool-down window."""
-        now = asyncio.get_running_loop().time()
-        if now - self._last_rescan_time >= RESCAN_COOLDOWN:
-            self._last_rescan_time = now
-            await self._rescan()
-
-    # disposition: 1.4
     async def scan(self) -> None:
         """Send an IASD broadcast on all local interfaces."""
         if self._transport is None:
             raise ConnectionError("Discovery transport is not ready")
         self._send_broadcasts()
 
-    # disposition: 1.4
     def schedule_cooled_scan(self) -> None:
         """Fire a non-blocking ``scan()`` if outside the rescan cooldown."""
         if self.is_closed:
@@ -416,7 +248,6 @@ class DiscoveryService:
 
         asyncio.get_running_loop().create_task(_run())
 
-    # disposition: 1.4
     def _ensure_endpoint_available(self, endpoint: ControllerEndpoint) -> None:
         """Raise if *endpoint* is already claimed."""
         if endpoint.uid in self._claimed_endpoints:
@@ -424,20 +255,17 @@ class DiscoveryService:
                 f"Controller {endpoint.uid} already created"
             )
 
-    # disposition: 1.4
     def _claim_endpoint(self, endpoint: ControllerEndpoint) -> None:
         """Move an endpoint from discovered to claimed."""
         self._ensure_endpoint_available(endpoint)
         self._known_endpoints.pop(endpoint.uid, None)
         self._claimed_endpoints[endpoint.uid] = endpoint
 
-    # disposition: 1.4
     def _cache_endpoint(self, endpoint: ControllerEndpoint) -> None:
         """Remember an unclaimed endpoint for later discovery calls."""
         self._ensure_endpoint_available(endpoint)
         self._known_endpoints[endpoint.uid] = endpoint
 
-    # disposition: 1.4
     def _emit_endpoint_discovered(self, endpoint: ControllerEndpoint) -> None:
         """Invoke on_endpoint_discovered and record uid for discover_all dedupe."""
         if self._on_endpoint_discovered:
@@ -446,7 +274,6 @@ class DiscoveryService:
         if self._discover_all_notified is not None:
             self._discover_all_notified.add(endpoint.uid)
 
-    # disposition: 1.4
     def _endpoint_by_host(
         self, endpoints: dict[str, ControllerEndpoint], host: str
     ) -> ControllerEndpoint | None:
@@ -455,7 +282,6 @@ class DiscoveryService:
                 return endpoint
         return None
 
-    # disposition: 1.4
     async def discover_by_host(self, host: str) -> ControllerEndpoint | None:
         """Return a known endpoint for *host*, or HTTP-probe if unseen.
 
@@ -482,7 +308,6 @@ class DiscoveryService:
         self._cache_endpoint(probed.endpoint)
         return probed.endpoint
 
-    # disposition: 1.4
     async def discover_by_uid(self, uid: str) -> ControllerEndpoint | None:
         """Broadcast IASD, wait for *uid*, and HTTP-verify the response.
 
@@ -524,7 +349,6 @@ class DiscoveryService:
             self._cache_endpoint(probed.endpoint)
             return probed.endpoint
 
-    # disposition: 1.4
     async def discover_all(self) -> list[ControllerEndpoint]:
         """Broadcast IASD, collect replies, and HTTP-verify each endpoint.
 
@@ -569,7 +393,6 @@ class DiscoveryService:
                     notified.add(probed.endpoint.uid)
             return verified
 
-    # disposition: 1.4
     async def create_controller(
         self,
         uid: str,
@@ -579,7 +402,7 @@ class DiscoveryService:
     ) -> Controller:
         """Create and initialize a controller at the given address.
 
-        Preferred 1.4 entry point after :func:`create_discovery`. One-shot per
+        Preferred entry point after :func:`create_discovery`. One-shot per
         UID. HTTP probe is the trust boundary; callers must handle the device
         being unreachable even after a recent discovery notify.
 
@@ -617,7 +440,6 @@ class DiscoveryService:
             self.schedule_address_changed(on_address_changed, pending_address_changed)
         return controller
 
-    # disposition: 1.4
     def schedule_address_changed(
         self,
         callback: Callable[[ControllerEndpoint], None],
@@ -631,7 +453,6 @@ class DiscoveryService:
             _invoke_address_changed(callback, endpoint)
         )
 
-    # disposition: 1.4
     async def _connect_controller_at(
         self,
         uid: str,
@@ -647,7 +468,6 @@ class DiscoveryService:
 
         controller = await self._controller_cls.create(
             self,
-            self._event_coordinator,
             probe=probed,
             on_address_changed=on_address_changed,
         )
@@ -655,7 +475,6 @@ class DiscoveryService:
         self._claim_endpoint(probed.endpoint)
         return controller
 
-    # disposition: 1.4
     def _release_endpoint(self, endpoint: ControllerEndpoint) -> None:
         """Move a claimed endpoint back to the discovered pool."""
         if endpoint.uid not in self._claimed_endpoints:
@@ -663,7 +482,6 @@ class DiscoveryService:
         self._claimed_endpoints.pop(endpoint.uid)
         self._known_endpoints[endpoint.uid] = endpoint
 
-    # disposition: 1.4
     def _controller_closed(self, controller: Controller) -> None:
         """Release a closed controller back to the unclaimed endpoint cache."""
         self._controllers.pop(controller.device_uid, None)
@@ -671,7 +489,6 @@ class DiscoveryService:
             ControllerEndpoint(uid=controller.device_uid, host=controller.device_ip)
         )
 
-    # disposition: 1.4
     async def _probe(self, host: str) -> ControllerProbe | None:
         """Probe controller; prefer useful V2 SystemV2, else V1 SystemSettings."""
         session = self._session
@@ -724,65 +541,6 @@ class DiscoveryService:
             system_settings=data,
             read_api="v1",
         )
-
-    # disposition: deprecate
-    async def fetch_controller(
-        self, uid: str, timeout: float | None = None
-    ) -> Controller | None:
-        """Return the controller with *uid*.
-
-        When *timeout* is provided, waits up to that many seconds for the
-        controller to appear via UDP discovery.
-
-        Does not raise if the controller is not found; returns ``None`` instead.
-        """
-        if uid in self._controllers:
-            return self._controllers[uid]
-        if timeout is None:
-            return None
-
-        ready = asyncio.Event()
-
-        class _WaitForUidListener(Listener):
-            def controller_discovered(self, ctrl: Controller) -> None:
-                if ctrl.device_uid == uid:
-                    ready.set()
-
-        listener = _WaitForUidListener()
-        self.add_listener(listener)
-        try:
-            # Re-check after registering the listener (add_listener uses call_soon,
-            # so no race possible in the single-threaded event loop).
-            if uid in self._controllers:
-                return self._controllers[uid]
-
-            await self._maybe_rescan()
-
-            with suppress(TimeoutError):
-                async with asyncio.timeout(timeout):
-                    await ready.wait()
-        finally:
-            self.remove_listener(listener)
-
-        return self._controllers.get(uid)
-
-    # disposition: deprecate
-    async def fetch_controllers(
-        self, timeout: float | None = None
-    ) -> dict[str, Controller]:
-        """Return all controllers currently known to the discovery service.
-
-        When *timeout* is provided, triggers a rescan and waits before
-        returning the registry snapshot.
-
-        Does not raise if no controllers are found.
-        """
-        if timeout is None:
-            return dict(self._controllers)
-
-        await self._maybe_rescan()
-        await asyncio.sleep(timeout)
-        return dict(self._controllers)
 
     async def close(self) -> None:
         """Stop discovery, close the UDP transport, and cancel tracked tasks."""
@@ -884,12 +642,6 @@ class DiscoveryService:
             return
         _LOG.warning("Error passed and ignored to error_received: %s", exc)
 
-    def _find_by_addr(self, addr: tuple[str, int]) -> Controller | None:
-        for ctrl in self._controllers.values():
-            if ctrl.device_ip == addr[0]:
-                return ctrl
-        return None
-
     def _on_datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         _LOG.debug("Datagram Received %s", data)
         if self._close_task:
@@ -903,10 +655,7 @@ class DiscoveryService:
         if data in (CHANGED_SYSTEM, CHANGED_ZONES, CHANGED_SCHEDULES):
             _LOG.debug("Ignoring push notification %s from %s", data, addr)
             return
-        if self._legacy_pathway:
-            self._discovery_received_deprecated(data)
-        else:
-            self._discovery_received(data)
+        self._discovery_received(data)
 
     def _record_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         """Append an inbound UDP datagram to the diagnostics ring buffer."""
@@ -928,67 +677,6 @@ class DiscoveryService:
             entry["tags"] = parts[3:] if len(parts) > 3 else []
         self._recent_udp.append(entry)
 
-    # disposition: deprecate
-    def _parse_datagram_deprecated(
-        self, data: bytes
-    ) -> tuple[list[str], str, str] | None:
-        try:
-            message = data.decode().split(",")
-        except UnicodeDecodeError:
-            return None
-        if len(message) < 3 or message[0] != "ASPort_12107":
-            return None
-        device_uid = message[1].split("_")[1]
-        device_ip = message[2].split("_")[1]
-        return message, device_uid, device_ip
-
-    # disposition: deprecate
-    def _discovery_received_deprecated(self, data: bytes) -> None:
-        parsed = self._parse_datagram_deprecated(data)
-        if parsed is None:
-            _LOG.warning("Invalid Message Received: %s", data.decode(errors="replace"))
-            return
-
-        message, device_uid, device_ip = parsed
-
-        if device_uid == PLACEHOLDER_DEVICE_UID:
-            return
-
-        if device_uid not in self._controllers:
-            if device_uid in self._pending_init:
-                return
-
-            is_v2 = len(message) >= 4 and "iZoneV2" in message[3:]
-            is_ipower = len(message) >= 4 and "iPower" in message[3:]
-            controller = self._create_controller(
-                device_uid, device_ip, is_v2, is_ipower
-            )
-
-            self._pending_init.add(device_uid)
-
-            async def initialize_controller() -> None:
-                try:
-                    try:
-                        await controller._initialize()  # noqa: SLF001
-                    except ConnectionError as ex:
-                        _LOG.warning(
-                            "Can't connect to discovered server at IP '%s' exception: %s",
-                            device_ip,
-                            repr(ex),
-                        )
-                        return
-
-                    self._controllers[device_uid] = controller
-                    self._event_coordinator.controller_discovered(controller)
-                finally:
-                    self._pending_init.discard(device_uid)
-
-            self.create_task(initialize_controller())
-        else:
-            controller = self._controllers[device_uid]
-            controller._refresh_address(device_ip)  # noqa: SLF001
-
-    # disposition: 1.4
     def _parse_datagram(self, data: bytes) -> ControllerEndpoint | None:
         try:
             message = data.decode().split(",")
@@ -1000,7 +688,6 @@ class DiscoveryService:
         device_host = message[2].split("_")[1]
         return ControllerEndpoint(uid=device_uid, host=device_host)
 
-    # disposition: 1.4
     def _discovery_received(self, data: bytes) -> None:
         """Handle passive ASPort: cache/notify unclaimed; address-change claimed."""
         endpoint = self._parse_datagram(data)
@@ -1030,53 +717,13 @@ class DiscoveryService:
         if newly_seen or host_changed:
             self._emit_endpoint_discovered(endpoint)
 
-    def _create_controller(
-        self, device_uid: str, device_ip: str, is_v2: bool, is_ipower: bool
-    ) -> Controller:
-        return self._controller_cls.from_discovery(
-            self,
-            self._event_coordinator,
-            device_uid=device_uid,
-            device_ip=device_ip,
-            is_v2=is_v2,
-            is_ipower=is_ipower,
-        )
 
-
-# disposition: deprecate
-def discovery(
-    *listeners: Listener, session: ClientSession | None = None
-) -> DiscoveryService:
-    """Create a legacy discovery service.
-
-    Preferred entry point for the legacy track. Prefer
-    :func:`create_discovery` for new code. Controllers appear via listeners
-    and :meth:`DiscoveryService.fetch_controller`; do not construct them
-    directly.
-
-    The returned object is an async context manager and can also be started
-    manually with :meth:`DiscoveryService.start_discovery`.
-
-    Args:
-        listeners: Optional listeners registered before discovery starts.
-        session: Optional shared :class:`aiohttp.ClientSession`.
-
-    """
-    service = DiscoveryService(session=session)
-    service._legacy_pathway = True  # noqa: SLF001
-    for listener in listeners:
-        service.add_listener(listener)
-    return service
-
-
-# disposition: 1.4
 def _clear_discovery_global(service: DiscoveryService) -> None:
     global _active_discovery  # noqa: PLW0603
     if _active_discovery is service:
         _active_discovery = None
 
 
-# disposition: 1.4
 async def _invoke_address_changed(
     callback: Callable[[ControllerEndpoint], None],
     endpoint: ControllerEndpoint,
@@ -1085,7 +732,6 @@ async def _invoke_address_changed(
         callback(endpoint)
 
 
-# disposition: 1.4
 async def create_discovery(
     *,
     on_endpoint_discovered: Callable[[ControllerEndpoint], None] | None = None,
@@ -1093,7 +739,7 @@ async def create_discovery(
 ) -> DiscoveryService:
     """Create the process-global discovery service.
 
-    Preferred 1.4 entry point. Use :meth:`DiscoveryService.create_controller`
+    Use :meth:`DiscoveryService.create_controller`
     (and the ``discover_*`` helpers) on the returned service; do not construct
     :class:`~pizone.controller.Controller` instances directly.
 

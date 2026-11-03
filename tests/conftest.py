@@ -1,11 +1,5 @@
 """Shared test fixtures and network-free controller doubles."""
 
-# disposition: 1.4 | deprecate  (untagged = keep)
-#   keep      — default; no tag required. Shared dual-track fixtures/helpers.
-#   1.4       — new consumer-driven discovery / refresh API
-#   deprecate — legacy track; grep and delete when dual-track ends
-
-from asyncio import Event, wait_for
 from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
 import json
@@ -13,8 +7,9 @@ from typing import Any, cast
 
 import pytest
 
-from pizone import Controller, Listener, power as power_mod
+from pizone import Controller, ControllerEndpoint, power as power_mod
 from pizone.discovery import DiscoveryService
+from pizone.types import ControllerProbe
 
 from .power_data import POWER_CONFIG, POWER_STATUS
 from .resources import SYSTEMS
@@ -32,13 +27,24 @@ def _system_data(device_uid: str) -> dict[str, Any]:
     return data
 
 
+# V1 system commands the mock bridge applies to SystemSettings, like the device.
+_V1_SYSTEM_COMMAND_FIELDS = {
+    "SystemON": "SysOn",
+    "SystemMODE": "SysMode",
+    "SystemFAN": "SysFan",
+    "SleepTimer": "SleepTimer",
+    "UnitSetpoint": "Setpoint",
+    "FreeAir": "FreeAir",
+}
+
+
 class MockController(Controller):
     """Controller double backed by static response dictionaries."""
 
     def __init__(
         self,
         discovery_service: DiscoveryService,
-        event_coordinator: Listener,
+        *,
         device_uid: str,
         device_ip: str,
         is_v2: bool,
@@ -46,7 +52,6 @@ class MockController(Controller):
     ) -> None:
         super().__init__(
             discovery_service,
-            event_coordinator,
             device_uid=device_uid,
             device_ip=device_ip,
             is_v2=is_v2,
@@ -64,9 +69,10 @@ class MockController(Controller):
     def _check_discovery_connected(self) -> None:
         service = cast(MockDiscoveryService, self.discovery)
         if not self._connected or not service.connected:
-            ex = OSError("Not Connected")
-            self._failed_connection(ex)
-            raise ConnectionError("Explicitly Disconnected") from ex
+            self._set_bridge_ok(False)
+            raise ConnectionError("Explicitly Disconnected") from OSError(
+                "Not Connected"
+            )
 
     async def _http_get(self, resource: str) -> Any:
         """Mock out the network IO for tracked GET requests."""
@@ -82,6 +88,8 @@ class MockController(Controller):
             raise ConnectionError("Unable to connect to the controller")
         self._check_discovery_connected()
         self.sent.append((command, data))
+        if (field := _V1_SYSTEM_COMMAND_FIELDS.get(command)) is not None:
+            self.resources["SystemSettings"][field] = data[command]
         if command == "iZoneRequestV2":
             if self.v2_probe_response is not None:
                 return self.v2_probe_response
@@ -139,43 +147,28 @@ class MockDiscoveryService(DiscoveryService):
 
     _controller_cls = MockController
 
-    def __init__(self, *, legacy_pathway: bool = True) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.connected: bool = True
-        self._legacy_pathway = legacy_pathway
 
     def _send_broadcasts(self) -> None:
         """Avoid network traffic during tests."""
 
 
-async def _register_mock_service(svc: MockDiscoveryService, datagram: bytes) -> None:
-    class ListenerConnected(Listener):
-        def __init__(self) -> None:
-            self._controller: Controller | None = None
-            self._connected = Event()
-
-        def controller_discovered(self, ctrl: Controller) -> None:
-            if self._controller is not None:
-                return
-            self._controller = ctrl
-            self._connected.set()
-
-        async def await_controller(self) -> Controller:
-            await wait_for(self._connected.wait(), 5)
-            assert self._controller is not None
-            return self._controller
-
-    listener = ListenerConnected()
-    svc.add_listener(listener)
-
-    await svc.start_discovery()
-
-    svc._process_datagram(
-        datagram,
-        ("8.8.8.8", 12107),
+async def add_mock_controller(
+    svc: MockDiscoveryService, device_uid: str, device_ip: str
+) -> MockController:
+    """Create, initialize and claim a controller the way ``create_controller`` does."""
+    settings = _system_data(device_uid)["SystemSettings"]
+    probe = ControllerProbe(
+        endpoint=ControllerEndpoint(uid=device_uid, host=device_ip),
+        system_settings=settings,
+        read_api="v1",
     )
-
-    await listener.await_controller()
+    controller = await MockController.create(svc, probe=probe)
+    svc._claim_endpoint(probe.endpoint)
+    svc._controllers[device_uid] = controller
+    return controller
 
 
 @pytest.fixture
@@ -189,73 +182,25 @@ def enable_power() -> Iterator[None]:
         power_mod.ENABLE_POWER = previous
 
 
-# disposition: deprecate
 @pytest.fixture
 async def service() -> AsyncIterator[MockDiscoveryService]:
-    """Mock discovery service with a pre-discovered controller."""
-    svc = MockDiscoveryService(legacy_pathway=True)
-
-    await _register_mock_service(
-        svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8,iZone,iLight,iDrate"
-    )
+    """Mock discovery service with a claimed, initialized controller."""
+    svc = MockDiscoveryService()
+    await add_mock_controller(svc, "000000001", "8.8.8.8")
 
     yield svc
 
     await svc.close()
 
 
-# disposition: deprecate
-@pytest.fixture
-async def legacy_service() -> AsyncIterator[MockDiscoveryService]:
-    """Mock discovery service with a minimal iZone datagram (no feature flags)."""
-    svc = MockDiscoveryService(legacy_pathway=True)
-
-    await _register_mock_service(svc, b"ASPort_12107,Mac_000000001,IP_8.8.8.8")
-
-    yield svc
-
-    await svc.close()
-
-
-# disposition: deprecate
 @pytest.fixture
 async def ipower_service(
     enable_power: None,
 ) -> AsyncIterator[MockDiscoveryService]:
     """Mock discovery service with an initialized iPower controller."""
     del enable_power
-    svc = MockDiscoveryService(legacy_pathway=True)
-    controller = MockController.from_discovery(
-        svc,
-        svc._event_coordinator,
-        device_uid="000000003",
-        device_ip="10.0.0.1",
-        is_v2=False,
-        is_ipower=True,
-    )
-    svc._controllers["000000003"] = controller
-    await controller._initialize()
-
-    yield svc
-
-    await svc.close()
-
-
-# disposition: 1.4
-@pytest.fixture
-async def service_14() -> AsyncIterator[MockDiscoveryService]:
-    """Mock discovery service with a pre-initialized controller (no poll/scan loops)."""
-    svc = MockDiscoveryService(legacy_pathway=False)
-    controller = MockController.from_discovery(
-        svc,
-        svc._event_coordinator,
-        device_uid="000000001",
-        device_ip="8.8.8.8",
-        is_v2=False,
-        is_ipower=False,
-    )
-    svc._controllers["000000001"] = controller
-    await controller._initialize()
+    svc = MockDiscoveryService()
+    await add_mock_controller(svc, "000000003", "10.0.0.1")
 
     yield svc
 

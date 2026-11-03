@@ -1,11 +1,5 @@
 """Tests for zone property reads and command validation."""
 
-# disposition: 1.4 | deprecate  (untagged = keep)
-#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
-#   1.4       — new consumer-driven discovery / refresh API
-#   deprecate — legacy track; grep and delete when dual-track ends
-#               (sticky within a function until the next disposition tag).
-
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from typing import cast
@@ -22,10 +16,9 @@ from .v2_fixtures import SAMPLE_SYSTEM_V2, SAMPLE_ZONES_V2
 
 @pytest.fixture
 async def v2_controller() -> AsyncIterator[MockController]:
-    svc = MockDiscoveryService(legacy_pathway=False)
-    controller = MockController.from_discovery(
+    svc = MockDiscoveryService()
+    controller = MockController(
         svc,
-        svc._event_coordinator,
         device_uid="000025841",
         device_ip="192.0.2.1",
         is_v2=True,
@@ -47,7 +40,6 @@ async def v2_controller() -> AsyncIterator[MockController]:
         await svc.close()
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mode", "wire_mode"),
@@ -73,7 +65,6 @@ async def test_v2_mode_selection_does_not_write_stale_setpoint(
     assert zone.temp_setpoint == 23.5
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_v2_auto_mode_does_not_need_cached_setpoint(
     v2_controller: MockController,
@@ -91,7 +82,6 @@ async def test_v2_auto_mode_does_not_need_cached_setpoint(
     assert zone.temp_setpoint == 22.5
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_v2_auto_on_open_close_zone_does_not_send(
     v2_controller: MockController,
@@ -104,7 +94,6 @@ async def test_v2_auto_on_open_close_zone_does_not_send(
     assert zone.dump_state() == before
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [ConnectionError, ControllerCommandError])
 async def test_v2_failed_auto_command_does_not_publish_mode(
@@ -125,15 +114,11 @@ async def test_v2_failed_auto_command_does_not_publish_mode(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_pathway", [True, False])
 @pytest.mark.parametrize("is_v2", [True, False])
-async def test_v1_auto_still_sends_cached_setpoint(
-    legacy_pathway: bool, is_v2: bool
-) -> None:
-    svc = MockDiscoveryService(legacy_pathway=legacy_pathway)
-    controller = MockController.from_discovery(
+async def test_v1_auto_still_sends_cached_setpoint(is_v2: bool) -> None:
+    svc = MockDiscoveryService()
+    controller = MockController(
         svc,
-        svc._event_coordinator,
         device_uid="000000001",
         device_ip="192.0.2.1",
         is_v2=is_v2,
@@ -158,7 +143,6 @@ async def test_v1_auto_still_sends_cached_setpoint(
         await svc.close()
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_zone_property_reads(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -174,7 +158,6 @@ async def test_zone_property_reads(service: MockDiscoveryService) -> None:
     assert zone.airflow_max == 90
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_min(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -189,7 +172,6 @@ async def test_set_airflow_min(service: MockDiscoveryService) -> None:
     assert zone.airflow_min == 20
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_max(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -204,7 +186,6 @@ async def test_set_airflow_max(service: MockDiscoveryService) -> None:
     assert zone.airflow_max == 80
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -220,7 +201,6 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
     assert zone.temp_setpoint == 22.0
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -237,7 +217,6 @@ async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
     assert zone.mode == Zone.Mode.CLOSE
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
@@ -248,7 +227,6 @@ async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None
         await zone.set_airflow_min(110)
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
@@ -259,7 +237,6 @@ async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None
         await zone.set_airflow_max(110)
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -275,7 +252,6 @@ async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> No
         await zone.set_temp_setpoint(35.0)
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None:
     controller = cast(MockController, service._controllers["000000001"])
@@ -286,7 +262,6 @@ async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None
         await zone.set_mode(Zone.Mode.AUTO)
 
 
-# disposition: deprecate
 @pytest.mark.asyncio
 async def test_update_zone_index_mismatch(service: MockDiscoveryService) -> None:
     zone = cast(MockController, service._controllers["000000001"]).zones[1]
@@ -294,10 +269,9 @@ async def test_update_zone_index_mismatch(service: MockDiscoveryService) -> None
     bad_data["Index"] = 99
 
     with pytest.raises(AttributeError, match="Can't change index"):
-        zone._update_zone(bad_data, notify=False)
+        zone._update_zone(bad_data)
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_v2_zone_status_properties(v2_controller: MockController) -> None:
     zone = v2_controller.zones[0]
@@ -310,7 +284,6 @@ async def test_v2_zone_status_properties(v2_controller: MockController) -> None:
     assert zone.sensor_type is Zone.SensorType.WIRELESS
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
 async def test_v2_zone_status_properties_absent(v2_controller: MockController) -> None:
     zone = v2_controller.zones[1]
@@ -323,10 +296,9 @@ async def test_v2_zone_status_properties_absent(v2_controller: MockController) -
     assert zone.sensor_type is None
 
 
-# disposition: 1.4
 @pytest.mark.asyncio
-async def test_v1_zone_status_properties(service_14: MockDiscoveryService) -> None:
-    zone = cast(MockController, service_14._controllers["000000001"]).zones[0]
+async def test_v1_zone_status_properties(service: MockDiscoveryService) -> None:
+    zone = cast(MockController, service._controllers["000000001"]).zones[0]
 
     assert zone.damper_fault is False
     assert zone.damper_position is None
@@ -336,7 +308,6 @@ async def test_v1_zone_status_properties(service_14: MockDiscoveryService) -> No
     assert zone.sensor_type is None
 
 
-# disposition: 1.4
 @pytest.mark.parametrize(
     ("key", "raw", "attr", "expected"),
     [

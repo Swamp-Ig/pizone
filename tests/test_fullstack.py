@@ -1,61 +1,24 @@
 """Hardware tests for a live iZone controller."""
 
-# disposition: 1.4 | deprecate  (untagged = keep)
-#   keep      — default; no tag required. Shared dual-track / pathway-agnostic tests.
-#   1.4       — new consumer-driven discovery / refresh API
-#   deprecate — legacy track; grep and delete when dual-track ends
-#               (sticky within a function until the next disposition tag).
-
 import asyncio
-from asyncio import Event, wait_for
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 
-from pizone import Controller, Listener, Zone, create_discovery, discovery
+from pizone import Controller, Zone, create_discovery
 
 
-class ListenerTesting(Listener):
-    """Track discovery and update callbacks from a live controller."""
-
-    def __init__(self) -> None:
-        self._controller: Controller | None = None
-        self._connected = Event()
-        self._updated = Event()
-        self.connect_count = 0
-        self.update_count = 0
-
-    def controller_discovered(self, ctrl: Controller) -> None:
-        if self._controller is not None:
-            return
-        self._controller = ctrl
-        self._connected.set()
-        self.connect_count += 1
-
-    def controller_disconnected(self, ctrl: Controller, ex: Exception) -> None:
-        if self._controller is not ctrl:
-            return
-        self._connected.clear()
-
-    def controller_reconnected(self, ctrl: Controller) -> None:
-        if self._controller is not ctrl:
-            return
-        self._connected.set()
-        self.connect_count += 1
-
-    def controller_update(self, ctrl: Controller) -> None:
-        if self._controller is not ctrl:
-            return
-        self.update_count += 1
-        self._updated.set()
-
-    async def await_controller(self) -> Controller:
-        await wait_for(self._connected.wait(), 5)
-        assert self._controller is not None
-        return self._controller
-
-    async def await_update(self) -> None:
-        self._updated.clear()
-        await wait_for(self._updated.wait(), 10)
+@asynccontextmanager
+async def _live_controller() -> AsyncIterator[Controller]:
+    """Discover the first controller on the LAN and create it."""
+    service = await create_discovery()
+    try:
+        endpoints = await service.discover_all()
+        assert endpoints, "No iZone controller found on the network"
+        yield await service.create_controller(endpoints[0].uid, endpoints[0].host)
+    finally:
+        await service.close()
 
 
 def dump_data(ctrl: Controller) -> None:
@@ -75,14 +38,9 @@ def dump_data(ctrl: Controller) -> None:
         )
 
 
-# disposition: deprecate
 @pytest.mark.hardware
 async def test_full_stack() -> None:
-    listener = ListenerTesting()
-
-    async with discovery(listener):
-        ctrl = await listener.await_controller()
-
+    async with _live_controller() as ctrl:
         dump_data(ctrl)
 
         old_mode = ctrl.mode
@@ -129,10 +87,8 @@ async def test_full_stack() -> None:
 
             assert ctrl.zones[1].airflow_max == nmax
 
-            # Wait for a re-read from the server
-            old_count = listener.update_count
-            await listener.await_update()
-            assert listener.update_count > old_count
+            # Confirm the values stuck on a fresh read.
+            await ctrl.refresh_all()
 
             assert ctrl.mode == mode
             assert ctrl.zones[1].airflow_min == nmin
@@ -147,39 +103,10 @@ async def test_full_stack() -> None:
         dump_data(ctrl)
 
 
-# disposition: deprecate
-@pytest.mark.hardware
-async def test_reconnect() -> None:
-    listener = ListenerTesting()
-
-    async with discovery(listener):
-        ctrl = await listener.await_controller()
-
-        assert listener.connect_count == 1
-
-        # Reconnect is driven by _refresh_address scheduling _retry_connection
-        # on the poll loop after the IP is restored.
-        ctrl._ip = "bababa"
-        with pytest.raises(ConnectionError):
-            await ctrl.set_sleep_timer(30)
-
-        # Should reconnect here
-        await listener.await_controller()
-
-        assert listener.connect_count == 2
-
-        await ctrl.set_sleep_timer(0)
-
-
-# disposition: deprecate
 @pytest.mark.hardware
 @pytest.mark.usefixtures("enable_power")
 async def test_power() -> None:
-    listener = ListenerTesting()
-
-    async with discovery(listener):
-        ctrl = await listener.await_controller()
-
+    async with _live_controller() as ctrl:
         assert ctrl.power is not None
         assert ctrl.power.enabled
 
@@ -202,7 +129,6 @@ async def test_power() -> None:
         )
 
 
-# disposition: 1.4
 @pytest.mark.hardware
 async def test_v2_command_interleaves_with_zone_poll() -> None:
     """Interleave a zone-mode command with an in-progress zone poll sweep.
@@ -213,12 +139,7 @@ async def test_v2_command_interleaves_with_zone_poll() -> None:
     sweep to finish. Offline fakes can't tell us whether a write landing
     mid-sweep confuses real firmware, so this needs a live V2 bridge.
     """
-    service = await create_discovery()
-    try:
-        endpoints = await service.discover_all()
-        assert endpoints, "No iZone controller found on the network"
-        ctrl = await service.create_controller(endpoints[0].uid, endpoints[0].host)
-
+    async with _live_controller() as ctrl:
         if ctrl._read_api != "v2":
             pytest.skip("Discovered controller is not on the V2 read/write path")
         if not ctrl.zones:
@@ -243,5 +164,3 @@ async def test_v2_command_interleaves_with_zone_poll() -> None:
             assert zone.mode == old_mode
         finally:
             await zone.set_mode(old_mode)
-    finally:
-        await service.close()

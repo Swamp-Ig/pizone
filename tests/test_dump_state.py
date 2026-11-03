@@ -60,7 +60,7 @@ async def test_discovery_dump_state(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_discovery_udp_ring_buffer() -> None:
-    service = MockDiscoveryService(legacy_pathway=False)
+    service = MockDiscoveryService()
     service._recent_udp.clear()
 
     service._process_datagram(

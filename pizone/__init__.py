@@ -1,8 +1,7 @@
 """Interface to the iZone air conditioner controller.
 
-Prefer :func:`~pizone.discovery.create_discovery` or
-:func:`~pizone.discovery.discovery` to obtain a discovery service, then create
-or discover :class:`~pizone.controller.Controller` instances through that
+Use :func:`~pizone.discovery.create_discovery` to obtain a discovery service,
+then create :class:`~pizone.controller.Controller` instances through that
 service. Zones and power monitors are owned by their controller.
 
 Synchronous property reads return cached device data and do not raise
@@ -30,7 +29,7 @@ from typing import Any
 
 from . import power as power_mod
 from .controller import Controller
-from .discovery import DiscoveryService, Listener, create_discovery, discovery
+from .discovery import DiscoveryService, create_discovery
 from .exceptions import (
     ControllerAlreadyClaimedError,
     ControllerCommandError,
@@ -70,7 +69,6 @@ __all__ = [
     "ControllerCommandError",
     "ControllerEndpoint",
     "DiscoveryService",
-    "Listener",
     "Power",
     "PowerChannel",
     "PowerDevice",
@@ -79,5 +77,4 @@ __all__ = [
     "UnpairedBridgeError",
     "Zone",
     "create_discovery",
-    "discovery",
 ]

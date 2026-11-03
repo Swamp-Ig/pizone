@@ -1,4 +1,4 @@
-"""Shared types for the 1.4 API."""
+"""Shared public types."""
 
 from dataclasses import dataclass
 from typing import Any, Literal

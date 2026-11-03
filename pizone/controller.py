@@ -1,9 +1,9 @@
 """iZone controller interface."""
 
 import asyncio
-from asyncio import Condition, Event, Lock, Task
+from asyncio import Event, Lock, Task
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from functools import wraps
@@ -20,7 +20,7 @@ from .types import ControllerEndpoint, ControllerProbe
 from .zone import Zone
 
 if TYPE_CHECKING:
-    from .discovery import DiscoveryService, Listener
+    from .discovery import DiscoveryService
 
 _LOG = logging.getLogger("pizone.controller")
 
@@ -51,9 +51,8 @@ def _refresh_api(
 class Controller:
     """Interface to an iZone controller.
 
-    Obtain instances via :meth:`pizone.discovery.DiscoveryService.create_controller`
-    (1.4) or the legacy discovery listener / :meth:`~pizone.discovery.DiscoveryService.fetch_controller`
-    path. Do not construct controllers directly in application code.
+    Obtain instances via :meth:`pizone.discovery.DiscoveryService.create_controller`.
+    Do not construct controllers directly in application code.
 
     **Reading state:** properties and other synchronous accessors return the
     last cached values from the device. They do not perform I/O and do not
@@ -94,12 +93,6 @@ class Controller:
 
     REQUEST_TIMEOUT = 10
     """Time to wait for a response from the device, in seconds."""
-
-    REFRESH_INTERVAL = 25.0
-    """Interval between data refreshes, in seconds."""
-
-    UPDATE_REFRESH_DELAY = 5.0
-    """Delay after sending a command before refreshing data, in seconds."""
 
     ZONE_CONFIRM_DELAY = 0.25
     ZONE_CONFIRM_INTERVAL = 2.0
@@ -144,7 +137,6 @@ class Controller:
     def __init__(
         self,
         discovery_service: DiscoveryService,
-        event_coordinator: Listener,
         *,
         device_uid: str,
         device_ip: str,
@@ -153,17 +145,14 @@ class Controller:
     ) -> None:
         """Set up controller fields.
 
-        Prefer :meth:`create` or :meth:`from_discovery`. Application code should
-        not call this directly.
+        Prefer :meth:`create`. Application code should not call this directly.
         """
         self._ip = device_ip
         self._discovery_service = discovery_service
-        self._event_coordinator = event_coordinator
         self._device_uid = device_uid
         self._is_v2 = is_v2
         self._is_ipower = is_ipower
-        # Reads stay V1 until 1.4 create sets this from a useful SystemV2 probe.
-        # UDP ``iZoneV2`` alone must not flip the read path.
+        # Reads stay V1 until create sets this from a useful SystemV2 probe.
         self._read_api: Literal["v1", "v2"] = "v1"
         self._v2_use_content_type: bool | None = None
         # Set once iSaveOn (V2 FreeAir write) returns {ERROR} on this controller,
@@ -176,14 +165,12 @@ class Controller:
         self._system_settings: Controller.ControllerData = {}
         self._power: Power | None = None
 
-        self._initialized: bool = False
         self._closed: bool = False
         self._bridge_ok: bool = True
         self._izone_ok: bool = True
         self._on_address_changed: Callable[[ControllerEndpoint], None] | None = None
 
         self._sending_lock = Lock()
-        self._scan_condition = Condition()
         self._refresh_depth: int = 0
         self._refresh_fail_ex: ConnectionError | None = None
         self._zone_mode_confirmations: dict[int, _ZoneModeConfirmation] = {}
@@ -191,23 +178,13 @@ class Controller:
         self._zone_confirm_wake = Event()
         self._zone_confirm_last_read = float("-inf")
 
-    @property
-    def _legacy_pathway(self) -> bool:
-        """True when this controller was created on the legacy discovery path."""
-        return self._discovery_service._legacy_pathway  # noqa: SLF001
-
     @asynccontextmanager
     async def _refresh_scope(self) -> AsyncIterator[None]:
-        """Nesting scope for refresh HTTP I/O (1.4 path).
+        """Nesting scope for refresh HTTP I/O.
 
         On the outermost exit: settle ``bridge_ok`` once, and on transport
-        failure nudge discovery ``scan()`` (with cooldown). Legacy pathway is
-        a no-op — bridge settle stays on ``_get_resource`` / command wrappers.
+        failure nudge discovery ``scan()`` (with cooldown).
         """
-        if self._legacy_pathway:
-            yield
-            return
-
         self._refresh_depth += 1
         try:
             yield
@@ -221,51 +198,21 @@ class Controller:
                 pending = self._refresh_fail_ex
                 self._refresh_fail_ex = None
                 if pending is not None:
-                    self._set_bridge_ok(False, pending)
+                    self._set_bridge_ok(False)
                     self._nudge_scan()
                 else:
                     self._set_bridge_ok(True)
 
     def _nudge_scan(self) -> None:
         """Non-blocking cooled-down IASD scan after HTTP transport failure."""
-        if self._legacy_pathway or self._closed:
+        if self._closed:
             return
         self._discovery_service.schedule_cooled_scan()
 
-    # disposition: deprecate
-    @classmethod
-    def from_discovery(
-        cls,
-        discovery_service: DiscoveryService,
-        event_coordinator: Listener,
-        *,
-        device_uid: str,
-        device_ip: str,
-        is_v2: bool,
-        is_ipower: bool,
-    ) -> Self:
-        """Construct a controller for the legacy passive-discovery track.
-
-        Prefer obtaining controllers through :func:`~pizone.discovery.discovery`
-        and the listener / :meth:`~pizone.discovery.DiscoveryService.fetch_controller`
-        path rather than calling this from application code. The caller must await
-        :meth:`_initialize` before using the instance.
-        """
-        return cls(
-            discovery_service,
-            event_coordinator,
-            device_uid=device_uid,
-            device_ip=device_ip,
-            is_v2=is_v2,
-            is_ipower=is_ipower,
-        )
-
-    # disposition: 1.4
     @classmethod
     async def create(
         cls,
         discovery_service: DiscoveryService,
-        event_coordinator: Listener,
         *,
         probe: ControllerProbe,
         on_address_changed: Callable[[ControllerEndpoint], None] | None = None,
@@ -279,7 +226,6 @@ class Controller:
         endpoint = probe.endpoint
         controller = cls(
             discovery_service,
-            event_coordinator,
             device_uid=endpoint.uid,
             device_ip=endpoint.host,
             is_v2=probe.read_api == "v2",
@@ -293,13 +239,8 @@ class Controller:
         )
         return controller
 
-    async def _initialize(
-        self, system_settings: Controller.ControllerData | None = None
-    ) -> None:
-        """Load system, zone, and optional power data from the device.
-
-        When *system_settings* is provided (1.4 create path), the initial
-        SystemSettings GET is skipped and the probe payload is applied instead.
+    async def _initialize(self, system_settings: Controller.ControllerData) -> None:
+        """Load zone and optional power data after applying the probe payload.
 
         Raises:
             ConnectionError: If a required HTTP request fails.
@@ -307,10 +248,7 @@ class Controller:
 
         """
         async with self._refresh_scope():
-            if system_settings is not None:
-                settings = self._apply_system_settings(system_settings, notify=False)
-            else:
-                settings = await self._fetch_system(notify=False)
+            settings = self._apply_system_settings(system_settings)
             if settings is None:
                 raise ConnectionError("SystemSettings device ID mismatch")
 
@@ -322,49 +260,12 @@ class Controller:
             else:
                 self.fan_modes = Controller._VALID_FAN_MODES["disabled"]
 
-            # 1.4 create already chose read_api; legacy still soft-probes V2.
-            if system_settings is None:
-                await self._probe_v2_api()
-
             zone_count = int(settings["NoOfZones"])
             self.zones = [Zone(self, i) for i in range(zone_count)]
 
-            await self._fetch_zones(notify=False)
+            await self._fetch_zones()
 
             await self._probe_power()
-
-            self._initialized = True
-            if not self.connected:
-                self._event_coordinator.controller_disconnected(
-                    self, ConnectionError("iZone controller unavailable")
-                )
-
-        # disposition: deprecate — poll loop only on legacy pathway (removed in 1.4e)
-        if self._legacy_pathway:
-            self._discovery_service.create_task(self._poll_loop())
-
-    async def _probe_v2_api(self) -> None:
-        """Legacy-path V2 capability probe; non-fatal on failure.
-
-        The 1.4 create path sets :attr:`is_v2` / ``_read_api`` from connect and
-        does not call this method.
-        """
-        try:
-            response = await self._http_post(
-                "iZoneRequestV2",
-                {"iZoneV2Request": {"Type": 1, "No": 0, "No1": 0}},
-            )
-            data = json.loads(response)
-            if (
-                isinstance(data, dict)
-                and data.get("AirStreamDeviceUId") == self._device_uid
-                and v2_mod.system_v2_useful(data)
-            ):
-                self._is_v2 = True
-            else:
-                self._is_v2 = False
-        except ConnectionError, ControllerCommandError, json.JSONDecodeError, KeyError:
-            self._is_v2 = False
 
     async def _probe_power(self) -> None:
         """Probe power monitor endpoint when discovery hinted iPower; non-fatal.
@@ -400,46 +301,6 @@ class Controller:
         self._is_ipower = False
         self._power = None
 
-    # disposition: deprecate — legacy poll loop (not started on 1.4 path; removed in 1.4e)
-    async def _poll_loop(self) -> None:
-        while True:
-            try:
-                async with asyncio.timeout(Controller.REFRESH_INTERVAL):
-                    async with self._scan_condition:
-                        await self._scan_condition.wait()
-                # triggered rescan, short delay
-                await asyncio.sleep(Controller.UPDATE_REFRESH_DELAY)
-            except TimeoutError:
-                pass
-
-            if self._closed or self._discovery_service.is_closed:
-                return
-
-            try:
-                _LOG.debug("Polling unit %s.", self._device_uid)
-                await self._refresh_all()
-            except ConnectionError:
-                _LOG.debug("Poll failed due to exception.", exc_info=True)
-            except Exception:  # noqa: BLE001
-                _LOG.error("Unexpected exception", exc_info=True)
-
-    # disposition: deprecate — legacy poll wake only (removed in 1.4e)
-    async def refresh(self) -> None:
-        """Wake the legacy poll loop to refresh controller data.
-
-        Raises:
-            RuntimeError: If called on the 1.4 pathway. Use
-                :meth:`refresh_all` / :meth:`refresh_system` / etc. instead.
-
-        """
-        if not self._legacy_pathway:
-            raise RuntimeError(
-                "Controller.refresh() is legacy-only; use refresh_all() "
-                "or refresh_system() / refresh_zones() / refresh_power()"
-            )
-        async with self._scan_condition:
-            self._scan_condition.notify()
-
     async def close(self) -> None:
         """Close the controller and release its UID back to discovery."""
         if self._closed:
@@ -451,8 +312,6 @@ class Controller:
             await asyncio.gather(self._zone_confirm_task, return_exceptions=True)
         self._on_address_changed = None
         self._discovery_service._controller_closed(self)  # noqa: SLF001
-        async with self._scan_condition:
-            self._scan_condition.notify()
 
     @property
     def bridge_connected(self) -> bool:
@@ -863,17 +722,8 @@ class Controller:
         """
         return cast(str, self._get_system_state("SysType"))
 
-    async def _request_get(self, resource: str) -> Any:
-        """GET used by refresh cores — bridge-aware on legacy, neutral on 1.4."""
-        if self._legacy_pathway:
-            return await self._get_resource(resource)
-        return await self._http_get(resource)
-
     async def _gather_refresh(self, *coros: Awaitable[Any]) -> None:
-        """Run refresh I/O concurrently; coalesce failures on the 1.4 path."""
-        if self._legacy_pathway:
-            await asyncio.gather(*coros)
-            return
+        """Run refresh I/O concurrently; coalesce failures."""
         results = await asyncio.gather(*coros, return_exceptions=True)
         await self._raise_gather_failures(results)
 
@@ -895,17 +745,15 @@ class Controller:
         if first_other is not None:
             raise first_other
 
-    async def _fetch_system(self, notify: bool = True) -> ControllerData | None:
+    async def _fetch_system(self) -> ControllerData | None:
         """Fetch system settings and apply to cache (no refresh scope)."""
         if self._read_api == "v2":
             async with self._sending_lock:
-                return await self._fetch_system_v2_unlocked(notify=notify)
-        values: Controller.ControllerData = await self._request_get("SystemSettings")
-        return self._apply_system_settings(values, notify=notify)
+                return await self._fetch_system_v2_unlocked()
+        values: Controller.ControllerData = await self._http_get("SystemSettings")
+        return self._apply_system_settings(values)
 
-    async def _fetch_system_v2_unlocked(
-        self, notify: bool = True
-    ) -> ControllerData | None:
+    async def _fetch_system_v2_unlocked(self) -> ControllerData | None:
         """Fetch SystemV2 and apply. Caller must hold ``_sending_lock``."""
         data = await self._v2_request(1, 0)
         if data is None or not v2_mod.system_v2_useful(data):
@@ -917,7 +765,7 @@ class Controller:
         values = v2_mod.system_v2_to_settings(
             cast(dict[str, Any], data["SystemV2"]), uid
         )
-        return self._apply_system_settings(values, notify=notify)
+        return self._apply_system_settings(values)
 
     async def _v2_request(self, req_type: int, no: int = 0) -> dict[str, Any] | None:
         """POST iZoneRequestV2 using the cached Content-Type mode."""
@@ -939,7 +787,7 @@ class Controller:
             self._v2_use_content_type = mode
         return parsed
 
-    async def _fetch_zone_group(self, group: int, notify: bool = True) -> None:
+    async def _fetch_zone_group(self, group: int) -> None:
         """Fetch one zone group and update cache (no refresh scope)."""
         if self._read_api == "v2":
             raise RuntimeError("V2 path uses per-zone Type=2 fetches, not zone groups")
@@ -947,13 +795,13 @@ class Controller:
             raise ValueError(f"Unsupported zone group start index {group}")
 
         resource = "Zones13_14" if group == 12 else f"Zones{group + 1}_{group + 4}"
-        zone_data_part = await self._request_get(resource)
+        zone_data_part = await self._http_get(resource)
 
         for i in range(min(len(self.zones) - group, 4)):
             zone_data = zone_data_part[i]
-            self.zones[i + group]._update_zone(zone_data, notify)  # noqa: SLF001
+            self.zones[i + group]._update_zone(zone_data)  # noqa: SLF001
 
-    async def _fetch_zones(self, notify: bool = True) -> None:
+    async def _fetch_zones(self) -> None:
         """Fetch all zones (no refresh scope).
 
         V1 uses overlapped group GETs. V2 uses sequential Type=2 POSTs (local
@@ -967,13 +815,13 @@ class Controller:
             # between zones rather than holding it for an entire polling sweep.
             for index in range(zones):
                 async with self._sending_lock:
-                    await self._fetch_zone_v2_unlocked(index, notify=notify)
+                    await self._fetch_zone_v2_unlocked(index)
             return
         await self._gather_refresh(
-            *[self._fetch_zone_group(i, notify) for i in range(0, zones, 4)]
+            *[self._fetch_zone_group(i) for i in range(0, zones, 4)]
         )
 
-    async def _fetch_power(self, notify: bool = True) -> None:
+    async def _fetch_power(self) -> None:
         """Fetch power monitor status when enabled (no refresh scope).
 
         Raises on failure — callers must handle. No-op when power is disabled
@@ -986,73 +834,44 @@ class Controller:
         if not self.bridge_connected:
             return
 
-        updated = await self._power.refresh()
-        if updated and notify:
-            self._event_coordinator.power_update(self)
+        await self._power.refresh()
 
-    async def _fetch_all(self, notify: bool = True) -> None:
+    async def _fetch_all(self) -> None:
         """System + zones [+ power] fetch (no refresh scope)."""
         if self._read_api == "v2":
-            await self._fetch_system(notify)
-            await self._fetch_zones(notify)
-            await self._fetch_power(notify)
+            await self._fetch_system()
+            await self._fetch_zones()
+            await self._fetch_power()
             return
         zones = len(self.zones)
-        coros: list[Awaitable[Any]] = [self._fetch_system(notify)]
+        coros: list[Awaitable[Any]] = [self._fetch_system()]
         if power_mod.ENABLE_POWER and self._power is not None and self._power.enabled:
-            coros.append(self._fetch_power(notify))
+            coros.append(self._fetch_power())
         if zones > 0:
-            coros.extend(self._fetch_zone_group(i, notify) for i in range(0, zones, 4))
+            coros.extend(self._fetch_zone_group(i) for i in range(0, zones, 4))
         await self._gather_refresh(*coros)
 
     @_refresh_api
     async def refresh_system(self) -> None:
         """Refresh system settings from the device."""
-        await self._fetch_system(notify=True)
+        await self._fetch_system()
 
     @_refresh_api
     async def refresh_zones(self) -> None:
         """Refresh all zones from the device."""
-        await self._fetch_zones(notify=True)
+        await self._fetch_zones()
 
     @_refresh_api
     async def refresh_power(self) -> None:
         """Refresh power monitor data when enabled."""
-        await self._fetch_power(notify=True)
+        await self._fetch_power()
 
     @_refresh_api
     async def refresh_all(self) -> None:
         """Refresh system, zones, and power (if enabled)."""
-        await self._fetch_all(notify=True)
+        await self._fetch_all()
 
-    # disposition: deprecate — prefer public refresh_*; used by legacy poll
-    async def _refresh_all(self, notify: bool = True) -> None:
-        """Refresh system, power, and zone data from the device.
-
-        Raises:
-            ConnectionError: If any HTTP request fails.
-            KeyError: If a required field is missing from a device response.
-
-        """
-        await self._fetch_all(notify=notify)
-
-    # disposition: deprecate — prefer refresh_system()
-    async def _refresh_system(self, notify: bool = True) -> ControllerData | None:
-        """Refresh the system settings from the device.
-
-        Returns the device response even when the payload is a fault placeholder,
-        so callers can read fields like ``NoOfZones`` during initialization.
-
-        Raises:
-            ConnectionError: If the HTTP request fails.
-            KeyError: If the response is missing required fields.
-
-        """
-        return await self._fetch_system(notify=notify)
-
-    def _apply_system_settings(
-        self, values: ControllerData, *, notify: bool = True
-    ) -> ControllerData | None:
+    def _apply_system_settings(self, values: ControllerData) -> ControllerData | None:
         """Apply SystemSettings payload to the local cache."""
         if self._device_uid != values["AirStreamDeviceUId"]:
             _LOG.error("_refresh_system called with non-matching device ID")
@@ -1063,34 +882,15 @@ class Controller:
                 "iZone subsystem fault uid=%s; retaining cache",
                 self._device_uid,
             )
-            self._set_izone_ok(False, ConnectionError("iZone controller unavailable"))
-            if notify:
-                self._event_coordinator.controller_update(self)
+            self._set_izone_ok(False)
             return values
 
         self._system_settings = values
         self._set_izone_ok(True)
-        if notify:
-            self._event_coordinator.controller_update(self)
         return values
 
-    # disposition: deprecate — prefer refresh_power()
-    async def _refresh_power(self, notify: bool = True) -> None:
-        """Refresh power monitor data when enabled."""
-        await self._fetch_power(notify=notify)
-
-    # disposition: deprecate — prefer refresh_zones()
-    async def _refresh_zones(self, notify: bool = True) -> None:
-        """Refresh all zone groups from the device."""
-        await self._fetch_zones(notify=notify)
-
-    # disposition: deprecate
-    async def _refresh_zone_group(self, group: int, notify: bool = True) -> None:
-        """Refresh one zone group from the device."""
-        await self._fetch_zone_group(group, notify=notify)
-
     def _refresh_address(self, address: str) -> None:
-        """Update the device IP and schedule a reconnect attempt if needed."""
+        """Update the device IP and notify the consumer of the move."""
         if self._closed:
             return
         if address != self._ip:
@@ -1100,9 +900,6 @@ class Controller:
                 self._discovery_service.schedule_address_changed(
                     self._on_address_changed, endpoint
                 )
-        # disposition: deprecate — retry task only on legacy pathway
-        if not self._bridge_ok and self._legacy_pathway:
-            self._discovery_service.create_task(self._retry_connection())
 
     @staticmethod
     def _system_settings_valid(values: ControllerData) -> bool:
@@ -1147,13 +944,6 @@ class Controller:
         if send is None:
             send = value
 
-        if self._legacy_pathway:
-            await self._send_command_async(command, {command: send})
-            self._system_settings[state] = value
-            self._event_coordinator.controller_update(self)
-            await self.refresh()
-            return
-
         async with self._sending_lock, self._refresh_scope():
             if self._read_api == "v2":
                 v2_payload = v2_mod.system_command_to_v2(state, value, send)
@@ -1170,22 +960,16 @@ class Controller:
                 else:
                     await self._http_post(command, {command: send})
                 self._system_settings[state] = value
-                self._event_coordinator.controller_update(self)
-                await self._fetch_system_v2_unlocked(notify=True)
+                await self._fetch_system_v2_unlocked()
             else:
                 await self._http_post(command, {command: send})
                 self._system_settings[state] = value
-                self._event_coordinator.controller_update(self)
-                await self._fetch_system(notify=True)
+                await self._fetch_system()
 
     async def _execute_zone_command(
         self, command: str, data: dict[str, Any], zone_index: int
     ) -> None:
-        """POST a zone command; on 1.4 path confirm with a zone refresh."""
-        if self._legacy_pathway:
-            await self._send_command_async(command, data)
-            return
-
+        """POST a zone command and confirm with a zone refresh."""
         async with self._sending_lock, self._refresh_scope():
             if self._read_api == "v2":
                 if self._closed:
@@ -1196,13 +980,13 @@ class Controller:
                     mode = v2_mod.zone_mode_from_wire(payload["ZoneMode"]["Mode"])
                     self._track_zone_mode(zone_index, mode.value)
                 else:
-                    await self._fetch_zone_v2_unlocked(zone_index, notify=True)
+                    await self._fetch_zone_v2_unlocked(zone_index)
             else:
                 group = (zone_index // 4) * 4
                 await self._http_post(command, data)
-                await self._fetch_zone_group(group, notify=True)
+                await self._fetch_zone_group(group)
 
-    async def _fetch_zone_v2_unlocked(self, index: int, notify: bool = True) -> None:
+    async def _fetch_zone_v2_unlocked(self, index: int) -> None:
         """Refresh one zone via Type=2. Caller must hold ``_sending_lock``."""
         if index < 0 or index >= len(self.zones):
             return
@@ -1212,7 +996,7 @@ class Controller:
         ):
             raise ConnectionError(f"Invalid V2 zone response for index {index}")
         zone_data = v2_mod.zones_v2_to_zone_data(cast(dict[str, Any], data["ZonesV2"]))
-        self._apply_v2_zone_state(index, zone_data, notify)
+        self._apply_v2_zone_state(index, zone_data)
 
     def _track_zone_mode(self, index: int, mode: str) -> None:
         """Coalesce confirmations after ACK without delaying the caller."""
@@ -1235,9 +1019,7 @@ class Controller:
                 del self._zone_mode_confirmations[index]
                 _LOG.warning("V2 mode selection unconfirmed for zone %s", index)
 
-    def _apply_v2_zone_state(
-        self, index: int, zone_data: Zone.ZoneData, notify: bool
-    ) -> None:
+    def _apply_v2_zone_state(self, index: int, zone_data: Zone.ZoneData) -> None:
         """Allow a short settling window, then show fresh contradictory state."""
         now = asyncio.get_running_loop().time()
         self._expire_zone_modes(now)
@@ -1248,7 +1030,7 @@ class Controller:
                 self._zone_confirm_wake.set()
             elif now < pending.issued + self.ZONE_OPTIMISTIC_WINDOW:
                 zone_data = {**zone_data, "Mode": pending.mode}
-        self.zones[index]._update_zone(zone_data, notify)  # noqa: SLF001
+        self.zones[index]._update_zone(zone_data)  # noqa: SLF001
 
     async def _wait_for_zone_confirm_wake(self, wake_at: float) -> None:
         """Wait for a new command or the next scheduled confirmation deadline."""
@@ -1290,12 +1072,12 @@ class Controller:
                         ):
                             continue
                         self._zone_confirm_last_read = loop.time()
-                        await self._fetch_zone_v2_unlocked(index, notify=True)
+                        await self._fetch_zone_v2_unlocked(index)
                 except TimeoutError:
                     # This deadline bounds confirmation, not bridge availability.
                     pass
-                except ConnectionError as ex:
-                    self._set_bridge_ok(False, ex)
+                except ConnectionError:
+                    self._set_bridge_ok(False)
                     self._nudge_scan()
                     _LOG.debug("V2 zone confirmation read failed", exc_info=True)
                 else:
@@ -1328,71 +1110,17 @@ class Controller:
             raise ControllerCommandError(f"Server returned error state {body}")
         return body.removesuffix("{OK}")
 
-    def _set_bridge_ok(self, ok: bool, ex: Exception | None = None) -> None:
-        was_connected = self.connected
+    def _set_bridge_ok(self, ok: bool) -> None:
         self._bridge_ok = ok
-        if not ok and ex is None:
-            ex = ConnectionError("Unable to connect to the controller")
-        self._notify_connected_changed(was_connected, ex if not ok else None)
 
-    def _set_izone_ok(self, ok: bool, ex: Exception | None = None) -> None:
-        was_connected = self.connected
+    def _set_izone_ok(self, ok: bool) -> None:
         self._izone_ok = ok
-        if not ok and ex is None:
-            ex = ConnectionError("iZone controller unavailable")
-        self._notify_connected_changed(was_connected, ex if not ok else None)
-
-    def _notify_connected_changed(
-        self, was_connected: bool, ex: Exception | None
-    ) -> None:
-        if was_connected == self.connected or not self._initialized:
-            return
-        if self.connected:
-            self._event_coordinator.controller_update(self)
-            for zone in self.zones:
-                self._event_coordinator.zone_update(self, zone)
-            self._event_coordinator.power_update(self)
-            self._event_coordinator.controller_reconnected(self)
-        elif ex is not None:
-            self._event_coordinator.controller_disconnected(self, ex)
-
-    def _failed_connection(self, ex: Exception) -> None:
-        """Mark the bridge transport as failed."""
-        self._set_bridge_ok(False, ex)
-
-    def _restored_connection(self) -> None:
-        """Mark the bridge transport as restored."""
-        self._set_bridge_ok(True)
-
-    # disposition: deprecate — legacy reconnect after UDP address change
-    async def _retry_connection(self) -> None:
-        """Attempt to restore connectivity after a connection failure.
-
-        Connection errors are logged and not re-raised. A successful refresh
-        restores :attr:`connected` when both bridge and iZone layers recover.
-        """
-        _LOG.info(
-            "Attempting to reconnect to server uid=%s ip=%s",
-            self.device_uid,
-            self.device_ip,
-        )
-
-        try:
-            await self._refresh_all(notify=False)
-        except ConnectionError:
-            # Expected, just carry on.
-            _LOG.warning(
-                "Reconnect attempt for uid=%s failed with exception",
-                self.device_uid,
-                exc_info=True,
-            )
 
     async def _http_get(self, resource: str) -> Any:
         """Fetch a JSON resource via HTTP GET without updating connection state.
 
-        On the legacy pathway, serializes via ``_sending_lock`` (1.3 behaviour).
-        On the 1.4 pathway, does not lock so overlapped GETs can run concurrently;
-        command micro-batches hold the lock around POST + confirm separately.
+        Does not lock, so overlapped GETs can run concurrently; command
+        micro-batches hold ``_sending_lock`` around POST + confirm separately.
 
         Raises:
             ConnectionError: If the device cannot be reached.
@@ -1403,15 +1131,11 @@ class Controller:
         session = self._discovery_service.session
         if session is None:
             raise ConnectionError("Discovery service is not started")
-        lock = self._sending_lock if self._legacy_pathway else nullcontext()
         try:
-            async with (
-                lock,
-                session.get(
-                    f"http://{self.device_ip}/{resource}",
-                    timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
-                ) as response,
-            ):
+            async with session.get(
+                f"http://{self.device_ip}/{resource}",
+                timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
+            ) as response:
                 if response.status >= 400 and response.status < 500:
                     raise ControllerCommandError(
                         f"HTTP {response.status} for http://{self.device_ip}/{resource}"
@@ -1433,9 +1157,8 @@ class Controller:
     async def _http_post(self, command: str, data: dict[str, Any]) -> str:
         """Send a command via HTTP POST without updating connection state.
 
-        On the legacy pathway, serializes via ``_sending_lock`` (1.3 behaviour).
-        On the 1.4 pathway, does not lock here — callers that need POST+confirm
-        atomicity hold ``_sending_lock`` around the micro-batch.
+        Does not lock here — callers that need POST+confirm atomicity hold
+        ``_sending_lock`` around the micro-batch.
 
         Raises:
             ConnectionError: If the device cannot be reached or the HTTP request fails.
@@ -1447,16 +1170,12 @@ class Controller:
         if session is None:
             raise ConnectionError("Discovery service is not started")
         body = json.dumps(data).encode("utf-8")
-        lock = self._sending_lock if self._legacy_pathway else nullcontext()
         try:
-            async with (
-                lock,
-                session.post(
-                    f"http://{self.device_ip}/{command}",
-                    data=body,
-                    timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
-                ) as response,
-            ):
+            async with session.post(
+                f"http://{self.device_ip}/{command}",
+                data=body,
+                timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
+            ) as response:
                 if response.status >= 400 and response.status < 500:
                     raise ControllerCommandError(
                         f"HTTP {response.status} for http://{self.device_ip}/{command}"
@@ -1474,47 +1193,4 @@ class Controller:
             raise ControllerCommandError(f"Server returned error state {result}")
         if len(result) >= 4 and result[-4:] == "{OK}":
             result = result[:-4]
-        return result
-
-    async def _get_resource(self, resource: str) -> Any:
-        """Fetch a JSON resource from the device via HTTP GET.
-
-        Raises:
-            ConnectionError: If the device cannot be reached or the HTTP request fails.
-            ResponseDecodeError: If the response cannot be decoded as JSON.
-            ControllerCommandError: If the device returns HTTP 4xx.
-
-        """
-        try:
-            result = await self._http_get(resource)
-        except ControllerCommandError:
-            self._set_bridge_ok(True)
-            raise
-        except ResponseDecodeError:
-            self._set_bridge_ok(True)
-            raise
-        except ConnectionError as ex:
-            self._set_bridge_ok(False, ex)
-            raise
-        self._set_bridge_ok(True)
-        return result
-
-    async def _send_command_async(self, command: str, data: dict[str, Any]) -> str:
-        """Send a command to the device via HTTP POST.
-
-        Raises:
-            ConnectionError: If the device cannot be reached or the HTTP request fails.
-            ControllerCommandError: If the device returns HTTP 4xx or an
-                ``{ERROR...}`` payload.
-
-        """
-        try:
-            result = await self._http_post(command, data)
-        except ControllerCommandError:
-            self._set_bridge_ok(True)
-            raise
-        except ConnectionError as ex:
-            self._set_bridge_ok(False, ex)
-            raise
-        self._set_bridge_ok(True)
         return result

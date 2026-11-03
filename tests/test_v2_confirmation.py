@@ -16,10 +16,9 @@ from .v2_fixtures import SAMPLE_SYSTEM_V2, SAMPLE_ZONES_V2
 
 @pytest.fixture
 async def controller() -> AsyncIterator[MockController]:
-    svc = MockDiscoveryService(legacy_pathway=False)
-    ctrl = MockController.from_discovery(
+    svc = MockDiscoveryService()
+    ctrl = MockController(
         svc,
-        svc._event_coordinator,
         device_uid="000025841",
         device_ip="192.0.2.1",
         is_v2=True,

@@ -203,7 +203,6 @@ class Zone:
 
         await self._send_command("AirMinCommand", value)
         self._zone_data["MinAir"] = value
-        self._fire_listeners()
 
     async def set_airflow_max(self, value: int) -> None:
         """Change the zone maximum airflow in 5% increments.
@@ -220,7 +219,6 @@ class Zone:
 
         await self._send_command("AirMaxCommand", value)
         self._zone_data["MaxAir"] = value
-        self._fire_listeners()
 
     async def set_temp_setpoint(self, value: float) -> None:
         """Change the zone temperature setpoint in degrees C.
@@ -244,7 +242,6 @@ class Zone:
         await self._send_command("ZoneCommand", value)
         self._zone_data["Mode"] = "auto"
         self._zone_data["SetPoint"] = value
-        self._fire_listeners()
 
     async def set_mode(self, value: Zone.Mode) -> None:
         """Set the current zone mode.
@@ -259,10 +256,7 @@ class Zone:
                 raise AttributeError("Can't use auto mode on open/close zone.")
             # V2 can select AUTO without overwriting a newer wall-panel setpoint.
             # V1 still needs the cached setpoint to select temperature control.
-            if (
-                not self._controller._legacy_pathway  # noqa: SLF001
-                and self._controller._read_api == "v2"  # noqa: SLF001
-            ):
+            if self._controller._read_api == "v2":  # noqa: SLF001
                 await self._send_command("ZoneCommand", value.value)
             else:
                 await self._send_command(
@@ -272,9 +266,8 @@ class Zone:
         else:
             await self._send_command("ZoneCommand", value.value)
             self._zone_data["Mode"] = value.value
-        self._fire_listeners()
 
-    def _update_zone(self, zone_data: Zone.ZoneData, notify: bool = True) -> None:
+    def _update_zone(self, zone_data: Zone.ZoneData) -> None:
         """Replace cached zone data from a device refresh.
 
         Raises:
@@ -286,11 +279,6 @@ class Zone:
         if str(zone_data.get("Type")) == "error":
             return
         self._zone_data = zone_data
-        if notify:
-            self._fire_listeners()
-
-    def _fire_listeners(self) -> None:
-        self._controller._event_coordinator.zone_update(self._controller, self)  # noqa: SLF001
 
     def _get_zone_state(self, state: str) -> DictValue:
         return self._zone_data[state]
