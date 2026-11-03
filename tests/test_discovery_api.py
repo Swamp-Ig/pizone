@@ -23,7 +23,7 @@ from pizone.types import ControllerProbe
 
 from .conftest import MockController, MockDiscoveryService
 from .http_fakes import FakeHttpResponse, FakeHttpSession
-from .v2_fixtures import v2_routing_session
+from .v2_fixtures import SAMPLE_SYSTEM_V2, v2_routing_session
 
 discovery_module = sys.modules["pizone.discovery"]
 
@@ -42,6 +42,23 @@ def _system_settings(uid: str) -> dict[str, object]:
 
 def _system_settings_response(uid: str) -> FakeHttpResponse:
     return FakeHttpResponse(200, json_data=_system_settings(uid))
+
+
+# Passes the SystemV2 usefulness check but cannot be converted to settings.
+MALFORMED_SYSTEM_V2 = {
+    **SAMPLE_SYSTEM_V2,
+    "SystemV2": {**SAMPLE_SYSTEM_V2["SystemV2"], "SysOn": None},
+}
+
+
+def _asport(uid: str, host: str) -> bytes:
+    return f"ASPort_12107,Mac_{uid},IP_{host},iZone".encode()
+
+
+async def _settle_verifies(service: DiscoveryService) -> None:
+    await asyncio.gather(
+        *(entry.verify for entry in service._endpoints.values() if entry.verify)
+    )
 
 
 def _probe_result(uid: str, host: str) -> ControllerProbe:
@@ -414,10 +431,8 @@ async def test_discover_all_invokes_callback() -> None:
 async def test_discover_all_notifies_known_without_new_datagram() -> None:
     """User scan notifies once for already-known same-host (no wait-window ASPort)."""
     service = MockDiscoveryService()
-    service._session = cast(
-        ClientSession,
-        FakeHttpSession(get_response=_system_settings_response("000025841")),
-    )
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
     service._cache_endpoint(ControllerEndpoint(uid="000025841", host="10.0.0.90"))
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
@@ -430,6 +445,8 @@ async def test_discover_all_notifies_known_without_new_datagram() -> None:
 
     assert endpoints == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
     assert discovered == endpoints
+    # Known endpoints are already verified.
+    assert session.get_calls == 0
     await service.close()
 
 
@@ -463,38 +480,275 @@ async def test_discover_all_dedupes_udp_and_verify_notify() -> None:
 @pytest.mark.asyncio
 async def test_passive_asport_notifies_new_only() -> None:
     service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
-    datagram = b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone"
+    endpoint = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+    datagram = _asport(endpoint.uid, endpoint.host)
 
-    service._process_datagram(datagram, ("10.0.0.90", 12107))
-    service._process_datagram(datagram, ("10.0.0.90", 12107))
+    # A burst of replies shares one verify, and nothing fires before it.
+    service._process_datagram(datagram, (endpoint.host, 12107))
+    service._process_datagram(datagram, (endpoint.host, 12107))
+    assert discovered == []
+    assert service._endpoints_in(_State.SEEN) == {endpoint.uid: endpoint}
+    await _settle_verifies(service)
 
-    assert discovered == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
+    assert discovered == [endpoint]
+    assert session.get_calls == 1
+    assert service._endpoints_in(_State.SEEN) == {}
+    assert service._endpoints_in(_State.KNOWN) == {endpoint.uid: endpoint}
+
+    # A verified cache hit is not re-probed.
+    service._process_datagram(datagram, (endpoint.host, 12107))
+    assert service._endpoints_in(_State.SEEN) == {}
+    assert session.get_calls == 1
     await service.close()
 
 
 @pytest.mark.asyncio
 async def test_passive_asport_notifies_on_host_change() -> None:
     service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
 
-    service._process_datagram(
-        b"ASPort_12107,Mac_000025841,IP_10.0.0.90,iZone",
-        ("10.0.0.90", 12107),
-    )
-    service._process_datagram(
-        b"ASPort_12107,Mac_000025841,IP_10.0.0.91,iZone",
-        ("10.0.0.91", 12107),
-    )
+    service._process_datagram(_asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107))
+    await _settle_verifies(service)
+    service._process_datagram(_asport("000025841", "10.0.0.91"), ("10.0.0.91", 12107))
+    # The old host stays known until the moved host answers.
+    assert service._endpoints_in(_State.KNOWN)["000025841"].host == "10.0.0.90"
+    await _settle_verifies(service)
 
     assert discovered == [
         ControllerEndpoint(uid="000025841", host="10.0.0.90"),
         ControllerEndpoint(uid="000025841", host="10.0.0.91"),
     ]
     assert service._endpoints_in(_State.KNOWN)["000025841"].host == "10.0.0.91"
+    assert session.get_calls == 2
     await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session",
+    [
+        pytest.param(
+            FakeHttpSession(get_error=OSError("unreachable")), id="unreachable"
+        ),
+        pytest.param(
+            FakeHttpSession(get_response=_system_settings_response("000099999")),
+            id="uid-mismatch",
+        ),
+        pytest.param(
+            FakeHttpSession(
+                get_response=_system_settings_response(PLACEHOLDER_DEVICE_UID)
+            ),
+            id="placeholder-reply",
+        ),
+        pytest.param(
+            FakeHttpSession(
+                get_response=FakeHttpResponse(200, json_data={"SysOn": "on"})
+            ),
+            id="malformed",
+        ),
+        pytest.param(
+            v2_routing_session(
+                system=MALFORMED_SYSTEM_V2,
+                get_response=FakeHttpResponse(200, body=""),
+            ),
+            id="malformed-v2",
+        ),
+    ],
+)
+async def test_passive_asport_failed_verify_drops_endpoint(
+    session: FakeHttpSession,
+) -> None:
+    service = MockDiscoveryService()
+    service._session = cast(ClientSession, session)
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    service._process_datagram(_asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107))
+    await _settle_verifies(service)
+
+    assert discovered == []
+    assert service._endpoints_in(_State.SEEN) == {}
+    assert service._endpoints_in(_State.KNOWN) == {}
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_passive_asport_failed_move_keeps_known_endpoint() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+    known = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+
+    service._process_datagram(_asport(known.uid, known.host), (known.host, 12107))
+    await _settle_verifies(service)
+    service._session = cast(
+        ClientSession, FakeHttpSession(get_error=OSError("unreachable"))
+    )
+    service._process_datagram(_asport(known.uid, "10.0.0.91"), ("10.0.0.91", 12107))
+    await _settle_verifies(service)
+
+    assert discovered == [known]
+    assert service._endpoints_in(_State.KNOWN) == {known.uid: known}
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_by_host_joins_inflight_move_verify() -> None:
+    service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
+    moved = ControllerEndpoint(uid="000025841", host="10.0.0.91")
+
+    service._process_datagram(_asport(moved.uid, "10.0.0.90"), ("10.0.0.90", 12107))
+    await _settle_verifies(service)
+    service._process_datagram(_asport(moved.uid, moved.host), (moved.host, 12107))
+
+    assert await service.discover_by_host(moved.host) == moved
+    assert session.get_calls == 2
+    assert service._endpoints_in(_State.KNOWN) == {moved.uid: moved}
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_by_host_joins_inflight_verify() -> None:
+    service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+    endpoint = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+
+    service._process_datagram(
+        _asport(endpoint.uid, endpoint.host), (endpoint.host, 12107)
+    )
+
+    assert await service.discover_by_host(endpoint.host) == endpoint
+    assert session.get_calls == 1
+    assert discovered == [endpoint]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_by_uid_returns_verified_without_probe() -> None:
+    service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
+    endpoint = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+
+    service._process_datagram(
+        _asport(endpoint.uid, endpoint.host), (endpoint.host, 12107)
+    )
+    await _settle_verifies(service)
+
+    with patch.object(service, "scan", AsyncMock()) as scan:
+        assert await service.discover_by_uid(endpoint.uid) == endpoint
+    scan.assert_not_awaited()
+    assert session.get_calls == 1
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_by_uid_joins_inflight_verify() -> None:
+    service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
+    endpoint = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+
+    service._process_datagram(
+        _asport(endpoint.uid, endpoint.host), (endpoint.host, 12107)
+    )
+
+    with patch.object(service, "scan", AsyncMock()) as scan:
+        assert await service.discover_by_uid(endpoint.uid) == endpoint
+    scan.assert_not_awaited()
+    assert session.get_calls == 1
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_by_uid_uses_verify_finished_during_wait() -> None:
+    service = MockDiscoveryService()
+    session = FakeHttpSession(get_response=_system_settings_response("000025841"))
+    service._session = cast(ClientSession, session)
+    endpoint = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+
+    async def scan_and_reply() -> None:
+        service._process_datagram(
+            _asport(endpoint.uid, endpoint.host), (endpoint.host, 12107)
+        )
+
+    async def settle(_delay: float) -> None:
+        await _settle_verifies(service)
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock(side_effect=settle)),
+        patch.object(service, "scan", side_effect=scan_and_reply),
+    ):
+        assert await service.discover_by_uid(endpoint.uid) == endpoint
+    assert session.get_calls == 1
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_passive_asport_claimed_during_verify_is_silent() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+    endpoint = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+
+    service._process_datagram(
+        _asport(endpoint.uid, endpoint.host), (endpoint.host, 12107)
+    )
+    verify = service._endpoints[endpoint.uid].verify
+    assert verify is not None
+    owner = MockController(
+        service,
+        device_uid=endpoint.uid,
+        device_ip=endpoint.host,
+        is_v2=False,
+        is_ipower=False,
+    )
+    service._claim(owner)
+
+    assert await verify is None
+    assert discovered == []
+    assert service._endpoints_in(_State.KNOWN) == {}
+    assert service._controller(endpoint.uid) is owner
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_inflight_verify() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    service._process_datagram(_asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107))
+    task = service._endpoints["000025841"].verify
+    assert task is not None
+    await service.close()
+
+    assert task.cancelled()
+    assert discovered == []
 
 
 @pytest.mark.asyncio
@@ -515,11 +769,56 @@ async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
         b"ASPort_12107,Mac_000025841,IP_10.0.0.91,iZone",
         ("10.0.0.91", 12107),
     )
+    # The move applies only once the new host answers.
+    assert controller.device_ip == "10.0.0.90"
+    await _settle_verifies(service)
     await asyncio.sleep(0)
 
     assert controller.device_ip == "10.0.0.91"
     assert seen == [ControllerEndpoint(uid="000025841", host="10.0.0.91")]
     assert service._endpoints_in(_State.CLAIMED)["000025841"].host == "10.0.0.91"
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "move_session",
+    [
+        pytest.param(
+            FakeHttpSession(get_error=OSError("unreachable")), id="unreachable"
+        ),
+        pytest.param(
+            FakeHttpSession(get_response=_system_settings_response("000099999")),
+            id="uid-mismatch",
+        ),
+    ],
+)
+async def test_claimed_asport_unverified_host_change_ignored(
+    move_session: FakeHttpSession,
+) -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    seen: list[ControllerEndpoint] = []
+    controller = await service.create_controller(
+        "000025841",
+        "10.0.0.90",
+        on_address_changed=seen.append,
+    )
+    service._session = cast(ClientSession, move_session)
+
+    service._process_datagram(
+        b"ASPort_12107,Mac_000025841,IP_10.0.0.91,iZone",
+        ("10.0.0.91", 12107),
+    )
+    await _settle_verifies(service)
+    await asyncio.sleep(0)
+
+    assert controller.device_ip == "10.0.0.90"
+    assert seen == []
+    assert service._endpoints_in(_State.CLAIMED)["000025841"].host == "10.0.0.90"
     await service.close()
 
 
@@ -719,9 +1018,9 @@ async def test_create_controller_rejects_overlapping_claim() -> None:
     gate = asyncio.Event()
     real_probe = service._probe
 
-    async def gated_probe(host: str) -> ControllerProbe | None:
+    async def gated_probe(host: str, **kwargs: str) -> ControllerProbe | None:
         await gate.wait()
-        return await real_probe(host)
+        return await real_probe(host, **kwargs)
 
     with patch.object(service, "_probe", side_effect=gated_probe) as probe:
         first = asyncio.create_task(service.create_controller("000025841", "10.0.0.90"))
@@ -854,6 +1153,42 @@ async def test_create_controller_address_fallback() -> None:
 
     assert discover_calls == 1
     assert controller.device_ip == "10.0.0.90"
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_create_controller_fallback_scan_leaves_claim_unverified() -> None:
+    """A reply mid-claim is probed directly, never cached, verified or notified."""
+    service = MockDiscoveryService()
+    responses = {
+        "10.0.0.1": _system_settings_response("000099999"),
+        "10.0.0.90": _system_settings_response("000025841"),
+    }
+
+    class RoutingSession(FakeHttpSession):
+        def get(self, url: object, **_kwargs: object) -> FakeHttpResponse:
+            ip = str(url).split("//", 1)[1].split("/", 1)[0]
+            return responses[ip]
+
+    service._session = cast(ClientSession, RoutingSession())
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+
+    async def scan_and_reply() -> None:
+        service._process_datagram(
+            _asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107)
+        )
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", side_effect=scan_and_reply),
+    ):
+        controller = await service.create_controller("000025841", "10.0.0.1")
+
+    assert controller.device_ip == "10.0.0.90"
+    assert discovered == []
+    assert service._endpoints_in(_State.SEEN) == {}
+    assert service._controller("000025841") is controller
     await service.close()
 
 
@@ -1049,6 +1384,20 @@ async def test_create_controller_falls_back_to_v1_when_v2_useless() -> None:
     service._session = cast(ClientSession, session)
     controller = await service.create_controller("000025841", "10.0.0.90")
     assert controller.is_v2 is False
+    assert controller._read_api == "v1"
+    assert session.get_calls == 1
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_create_controller_falls_back_to_v1_when_v2_malformed() -> None:
+    service = MockDiscoveryService()
+    session = v2_routing_session(
+        system=MALFORMED_SYSTEM_V2,
+        get_response=_system_settings_response("000025841"),
+    )
+    service._session = cast(ClientSession, session)
+    controller = await service.create_controller("000025841", "10.0.0.90")
     assert controller._read_api == "v1"
     assert session.get_calls == 1
     await service.close()

@@ -3,13 +3,14 @@
 import asyncio
 from asyncio import sleep
 from typing import cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import ClientSession
 import pytest
 
 from pizone import Controller, ControllerCommandError, ControllerEndpoint, Zone
 from pizone.discovery import DiscoveryService, _State
+from pizone.types import ControllerProbe
 
 from .conftest import MockController, MockDiscoveryService
 from .http_fakes import FakeHttpResponse, FakeHttpSession
@@ -89,11 +90,20 @@ async def test_ip_addr_change(service: MockDiscoveryService) -> None:
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
 
-    service._process_datagram(
-        b"ASPort_12107,Mac_000000001,IP_8.8.8.4,iZone,iLight,iDrate", ("8.8.8.4", 12107)
+    moved = ControllerEndpoint(uid="000000001", host="8.8.8.4")
+    probe = ControllerProbe(
+        endpoint=moved, system_settings=controller._system_settings, read_api="v1"
     )
-    await sleep(0)
+    with patch.object(service, "_probe", AsyncMock(return_value=probe)) as probe_mock:
+        service._process_datagram(
+            b"ASPort_12107,Mac_000000001,IP_8.8.8.4,iZone,iLight,iDrate",
+            ("8.8.8.4", 12107),
+        )
+        verify = service._endpoints[moved.uid].verify
+        assert verify is not None
+        await verify
 
+    probe_mock.assert_awaited_once_with(moved.host, expected_uid=moved.uid)
     assert controller.device_ip == "8.8.8.4"
 
 
@@ -219,7 +229,7 @@ async def test_x_ac_flag_discovery() -> None:
 
     svc._process_datagram(datagram, ("10.0.0.90", 12107))
 
-    assert svc._endpoints_in(_State.KNOWN) == {
+    assert svc._endpoints_in(_State.SEEN) == {
         "000025841": ControllerEndpoint(uid="000025841", host="10.0.0.90")
     }
     await svc.close()
