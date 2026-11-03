@@ -19,7 +19,9 @@ Synchronous property reads return cached device data and do not raise
 `ConnectionError`. Async command and refresh methods perform HTTP I/O and
 raise `ConnectionError` when the device cannot be reached. They raise
 `ControllerCommandError` when the device responds but rejects the request
-(`{ERROR}` body or HTTP 4xx).
+(`{ERROR}` body or HTTP 4xx). Setters raise `InvalidValueError` before any
+I/O when a value is out of range, off its step, or not supported by the system
+or zone. It subclasses both `ValueError` and `AttributeError`.
 
 ## Dependencies
 

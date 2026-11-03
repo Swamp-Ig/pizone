@@ -1,13 +1,14 @@
 """Tests for controller property reads and command paths."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
-from pizone import Controller, Zone, v2 as v2_mod
+from pizone import Controller, InvalidValueError, Zone, v2 as v2_mod
 from pizone.controller import ControllerCommandError
 
 from .conftest import MockController, MockDiscoveryService
@@ -119,29 +120,64 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_fan_validation(service: MockDiscoveryService) -> None:
+@pytest.mark.parametrize(
+    ("setter", "match"),
+    [
+        pytest.param(
+            lambda c: c.set_fan(Controller.Fan.TOP),
+            "Fan mode top not allowed",
+            id="fan-not-allowed",
+        ),
+        pytest.param(
+            lambda c: c.set_sleep_timer(45), "Invalid Sleep Timer", id="sleep-step"
+        ),
+        pytest.param(
+            lambda c: c.set_sleep_timer(150), "Invalid Sleep Timer", id="sleep-range"
+        ),
+        pytest.param(
+            lambda c: c.set_temp_setpoint(23.3),
+            "not rounded to nearest 0.5",
+            id="setpoint-step",
+        ),
+        pytest.param(
+            lambda c: c.set_temp_setpoint(35.0), "out of range", id="setpoint-range"
+        ),
+        pytest.param(
+            lambda c: c.set_free_air(True),
+            "Free air is disabled",
+            id="free-air-disabled",
+        ),
+        pytest.param(
+            lambda c: c.set_mode(Controller.Mode.FREE_AIR),
+            "Free air system is not enabled",
+            id="mode-free-air-disabled",
+        ),
+    ],
+)
+async def test_setter_rejects_invalid_value_without_io(
+    service: MockDiscoveryService,
+    setter: Callable[[Controller], Awaitable[None]],
+    match: str,
+) -> None:
     controller = cast(MockController, service._controller("000000001"))
+    controller._system_settings["FreeAir"] = "disabled"
+    controller.sent.clear()
 
-    with pytest.raises(AttributeError, match="Fan mode top not allowed"):
-        await controller.set_fan(Controller.Fan.TOP)
+    with pytest.raises(InvalidValueError, match=match):
+        await setter(controller)
+    assert controller.sent == []
 
 
 @pytest.mark.asyncio
-async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None:
+async def test_invalid_value_error_is_caught_as_attribute_error(
+    service: MockDiscoveryService,
+) -> None:
+    """Callers written against earlier versions catch AttributeError."""
     controller = cast(MockController, service._controller("000000001"))
 
-    with pytest.raises(AttributeError, match="Invalid Sleep Timer"):
+    with pytest.raises(AttributeError) as exc_info:
         await controller.set_sleep_timer(45)
-
-
-@pytest.mark.asyncio
-async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controller("000000001"))
-
-    with pytest.raises(AttributeError, match="not rounded to nearest 0.5"):
-        await controller.set_temp_setpoint(23.3)
-    with pytest.raises(AttributeError, match="out of range"):
-        await controller.set_temp_setpoint(35.0)
+    assert isinstance(exc_info.value, ValueError)
 
 
 @pytest.mark.asyncio

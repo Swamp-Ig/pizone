@@ -7,6 +7,8 @@ import builtins
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
+from .exceptions import InvalidValueError
+
 if TYPE_CHECKING:
     from .controller import Controller
 
@@ -192,14 +194,14 @@ class Zone:
         """Change the zone minimum airflow in 5% increments.
 
         Raises:
-            AttributeError: If the value is out of range or not divisible by 5.
+            InvalidValueError: If the value is out of range or not divisible by 5.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if value % 5 != 0:
-            raise AttributeError(f"MinAir '{value}' not rounded to nearest 5")
+            raise InvalidValueError(f"MinAir '{value}' not rounded to nearest 5")
         if value < 0 or value > 100:
-            raise AttributeError(f"MinAir '{value}' is out of range")
+            raise InvalidValueError(f"MinAir '{value}' is out of range")
 
         await self._send_command("AirMinCommand", value)
         self._zone_data["MinAir"] = value
@@ -208,14 +210,14 @@ class Zone:
         """Change the zone maximum airflow in 5% increments.
 
         Raises:
-            AttributeError: If the value is out of range or not divisible by 5.
+            InvalidValueError: If the value is out of range or not divisible by 5.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if value % 5 != 0:
-            raise AttributeError(f"MaxAir '{value}' not rounded to nearest 5")
+            raise InvalidValueError(f"MaxAir '{value}' not rounded to nearest 5")
         if value < 0 or value > 100:
-            raise AttributeError(f"MaxAir '{value}' is out of range")
+            raise InvalidValueError(f"MaxAir '{value}' is out of range")
 
         await self._send_command("AirMaxCommand", value)
         self._zone_data["MaxAir"] = value
@@ -227,17 +229,17 @@ class Zone:
         in half-degree increments.
 
         Raises:
-            AttributeError: If the zone is not temperature controlled or the
-                value is out of range.
+            InvalidValueError: If the zone is not temperature controlled, or the
+                value is out of range or not rounded to 0.5.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if self.type != Zone.Type.AUTO:
-            raise AttributeError(f"Can't set SetPoint to '{self.type}' type zone.")
+            raise InvalidValueError(f"Can't set SetPoint to '{self.type}' type zone.")
         if value % 0.5 != 0:
-            raise AttributeError(f"SetPoint '{value}' not rounded to nearest 0.5")
+            raise InvalidValueError(f"SetPoint '{value}' not rounded to nearest 0.5")
         if value < self._controller.temp_min or value > self._controller.temp_max:
-            raise AttributeError(f"SetPoint '{value}' is out of range")
+            raise InvalidValueError(f"SetPoint '{value}' is out of range")
 
         await self._send_command("ZoneCommand", value)
         self._zone_data["Mode"] = "auto"
@@ -247,13 +249,13 @@ class Zone:
         """Set the current zone mode.
 
         Raises:
-            AttributeError: If auto mode is requested on an open/close zone.
+            InvalidValueError: If auto mode is requested on an open/close zone.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if value == Zone.Mode.AUTO:
             if self.type != Zone.Type.AUTO:
-                raise AttributeError("Can't use auto mode on open/close zone.")
+                raise InvalidValueError("Can't use auto mode on open/close zone.")
             # V2 can select AUTO without overwriting a newer wall-panel setpoint.
             # V1 still needs the cached setpoint to select temperature control.
             if self._controller._read_api == "v2":  # noqa: SLF001

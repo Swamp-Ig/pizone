@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from pizone import Controller, Zone, create_discovery
+from pizone import Controller, InvalidValueError, Zone, create_discovery
 
 
 @asynccontextmanager
@@ -61,13 +61,13 @@ async def test_full_stack() -> None:
             nmin = 20 if old_airflow_min == 10 else 10
             await ctrl.zones[1].set_airflow_min(nmin)
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(InvalidValueError):
                 await ctrl.zones[1].set_airflow_min(41)
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(InvalidValueError):
                 await ctrl.zones[1].set_airflow_min(-1)
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(InvalidValueError):
                 await ctrl.zones[1].set_airflow_min(105)
 
             assert ctrl.zones[1].airflow_min == nmin
@@ -76,13 +76,13 @@ async def test_full_stack() -> None:
             nmax = 80 if old_airflow_max == 90 else 90
             await ctrl.zones[1].set_airflow_max(nmax)
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(InvalidValueError):
                 await ctrl.zones[1].set_airflow_max(41)
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(InvalidValueError):
                 await ctrl.zones[1].set_airflow_max(-1)
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(InvalidValueError):
                 await ctrl.zones[1].set_airflow_max(105)
 
             assert ctrl.zones[1].airflow_max == nmax

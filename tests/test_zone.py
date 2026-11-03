@@ -1,13 +1,13 @@
 """Tests for zone property reads and command validation."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from copy import deepcopy
 from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
-from pizone import Zone, v2 as v2_mod
+from pizone import Controller, InvalidValueError, Zone, v2 as v2_mod
 from pizone.controller import ControllerCommandError
 
 from .conftest import MockController, MockDiscoveryService
@@ -88,7 +88,9 @@ async def test_v2_auto_on_open_close_zone_does_not_send(
 ) -> None:
     zone = v2_controller.zones[1]
     before = zone.dump_state()
-    with pytest.raises(AttributeError, match="Can't use auto mode on open/close zone"):
+    with pytest.raises(
+        InvalidValueError, match="Can't use auto mode on open/close zone"
+    ):
         await zone.set_mode(Zone.Mode.AUTO)
     assert v2_controller.sent == []
     assert zone.dump_state() == before
@@ -218,48 +220,63 @@ async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None:
-    zone = cast(MockController, service._controller("000000001")).zones[1]
-
-    with pytest.raises(AttributeError, match="not rounded to nearest 5"):
-        await zone.set_airflow_min(41)
-    with pytest.raises(AttributeError, match="out of range"):
-        await zone.set_airflow_min(110)
-
-
-@pytest.mark.asyncio
-async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None:
-    zone = cast(MockController, service._controller("000000001")).zones[1]
-
-    with pytest.raises(AttributeError, match="not rounded to nearest 5"):
-        await zone.set_airflow_max(41)
-    with pytest.raises(AttributeError, match="out of range"):
-        await zone.set_airflow_max(110)
-
-
-@pytest.mark.asyncio
-async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
+@pytest.mark.parametrize(
+    ("setter", "match"),
+    [
+        pytest.param(
+            lambda c: c.zones[1].set_airflow_min(41),
+            "not rounded to nearest 5",
+            id="airflow-min-step",
+        ),
+        pytest.param(
+            lambda c: c.zones[1].set_airflow_min(110),
+            "out of range",
+            id="airflow-min-range",
+        ),
+        pytest.param(
+            lambda c: c.zones[1].set_airflow_max(41),
+            "not rounded to nearest 5",
+            id="airflow-max-step",
+        ),
+        pytest.param(
+            lambda c: c.zones[1].set_airflow_max(110),
+            "out of range",
+            id="airflow-max-range",
+        ),
+        pytest.param(
+            lambda c: c.zones[2].set_temp_setpoint(22.0),
+            "Can't set SetPoint",
+            id="setpoint-opcl-zone",
+        ),
+        pytest.param(
+            lambda c: c.zones[1].set_temp_setpoint(22.3),
+            "not rounded to nearest 0.5",
+            id="setpoint-step",
+        ),
+        pytest.param(
+            lambda c: c.zones[1].set_temp_setpoint(35.0),
+            "out of range",
+            id="setpoint-range",
+        ),
+        pytest.param(
+            lambda c: c.zones[2].set_mode(Zone.Mode.AUTO),
+            "Can't use auto mode on open/close zone",
+            id="auto-on-opcl-zone",
+        ),
+    ],
+)
+async def test_zone_setter_rejects_invalid_value_without_io(
+    service: MockDiscoveryService,
+    setter: Callable[[Controller], Awaitable[None]],
+    match: str,
+) -> None:
     controller = cast(MockController, service._controller("000000001"))
-    zone = controller.zones[1]
-    opcl = controller.zones[2]
-    opcl._zone_data["Type"] = "opcl"
+    controller.zones[2]._zone_data["Type"] = "opcl"
+    controller.sent.clear()
 
-    with pytest.raises(AttributeError, match="Can't set SetPoint"):
-        await opcl.set_temp_setpoint(22.0)
-    with pytest.raises(AttributeError, match="not rounded to nearest 0.5"):
-        await zone.set_temp_setpoint(22.3)
-    with pytest.raises(AttributeError, match="out of range"):
-        await zone.set_temp_setpoint(35.0)
-
-
-@pytest.mark.asyncio
-async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controller("000000001"))
-    zone = controller.zones[2]
-    zone._zone_data["Type"] = "opcl"
-
-    with pytest.raises(AttributeError, match="Can't use auto mode on open/close zone"):
-        await zone.set_mode(Zone.Mode.AUTO)
+    with pytest.raises(InvalidValueError, match=match):
+        await setter(controller)
+    assert controller.sent == []
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,9 @@ Synchronous property reads return cached device data and do not raise
 :exc:`ConnectionError`. Async command and refresh methods perform HTTP I/O and
 raise :exc:`ConnectionError` when the device cannot be reached. They raise
 :exc:`~pizone.exceptions.ControllerCommandError` when the device responds but
-rejects the request (``{ERROR...}`` body or HTTP 4xx).
+rejects the request (``{ERROR...}`` body or HTTP 4xx). Setters raise
+:exc:`~pizone.exceptions.InvalidValueError` before any I/O when a value is out
+of range, off its step, or not supported by the system or zone.
 
 Layered connection state on :class:`~pizone.controller.Controller`:
 
@@ -33,6 +35,7 @@ from .discovery import DiscoveryService, create_discovery
 from .exceptions import (
     ControllerAlreadyClaimedError,
     ControllerCommandError,
+    InvalidValueError,
     ResponseDecodeError,
     UnpairedBridgeError,
 )
@@ -69,6 +72,7 @@ __all__ = [
     "ControllerCommandError",
     "ControllerEndpoint",
     "DiscoveryService",
+    "InvalidValueError",
     "Power",
     "PowerChannel",
     "PowerDevice",

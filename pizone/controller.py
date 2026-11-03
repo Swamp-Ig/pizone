@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, cast
 import aiohttp
 
 from . import power as power_mod, v2 as v2_mod
-from .exceptions import ControllerCommandError, ResponseDecodeError
+from .exceptions import ControllerCommandError, InvalidValueError, ResponseDecodeError
 from .power import Power
 from .types import ControllerEndpoint, ControllerProbe
 from .zone import Zone
@@ -403,7 +403,7 @@ class Controller:
         """Set the system mode (cooling, heating, etc.).
 
         Raises:
-            AttributeError: If free air mode is requested but not enabled.
+            InvalidValueError: If free air mode is requested but not enabled.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
@@ -411,7 +411,7 @@ class Controller:
             if self.free_air:
                 return
             if not self.free_air_enabled:
-                raise AttributeError("Free air system is not enabled")
+                raise InvalidValueError("Free air system is not enabled")
             await self._set_system_state("FreeAir", "FreeAir", "on")
         else:
             if self.free_air:
@@ -435,12 +435,12 @@ class Controller:
         Not all fan modes are allowed depending on the system configuration.
 
         Raises:
-            AttributeError: If the requested fan mode is not allowed.
+            InvalidValueError: If the requested fan mode is not allowed.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if value not in self.fan_modes:
-            raise AttributeError(f"Fan mode {value.value} not allowed")
+            raise InvalidValueError(f"Fan mode {value.value} not allowed")
         await self._set_system_state(
             "SysFan",
             "SystemFAN",
@@ -465,13 +465,13 @@ class Controller:
         on when a non-zero sleep timer is set, treating it as "run, then stop".
 
         Raises:
-            AttributeError: If the value is out of range or not divisible by 30.
+            InvalidValueError: If the value is out of range or not divisible by 30.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         time = int(value)
         if time < 0 or time > 120 or time % 30 != 0:
-            raise AttributeError(
+            raise InvalidValueError(
                 f'Invalid Sleep Timer "{value}", must be divisible by 30'
             )
         await self._set_system_state("SleepTimer", "SleepTimer", value, time)
@@ -490,12 +490,12 @@ class Controller:
         """Turn the free air system on or off.
 
         Raises:
-            AttributeError: If the free air system is not enabled.
+            InvalidValueError: If the free air system is not enabled.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if not self.free_air_enabled:
-            raise AttributeError("Free air is disabled")
+            raise InvalidValueError("Free air is disabled")
         await self._set_system_state("FreeAir", "FreeAir", "on" if value else "off")
 
     @property
@@ -523,14 +523,14 @@ class Controller:
                 steps.
 
         Raises:
-            AttributeError: If the value is out of range or not rounded to 0.5.
+            InvalidValueError: If the value is out of range or not rounded to 0.5.
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         if value % 0.5 != 0:
-            raise AttributeError(f"SetPoint '{value}' not rounded to nearest 0.5")
+            raise InvalidValueError(f"SetPoint '{value}' not rounded to nearest 0.5")
         if value < self.temp_min or value > self.temp_max:
-            raise AttributeError(f"SetPoint '{value}' is out of range")
+            raise InvalidValueError(f"SetPoint '{value}' is out of range")
         await self._set_system_state("Setpoint", "UnitSetpoint", value, str(value))
 
     @property

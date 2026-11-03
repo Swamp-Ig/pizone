@@ -12,6 +12,15 @@ class ControllerCommandError(Exception):
     """
 
 
+class InvalidValueError(ValueError, AttributeError):
+    """A setter rejected a value before sending anything to the device.
+
+    Raised when a value is out of range, off the allowed step, or not supported
+    by the current system or zone configuration. Also an :exc:`AttributeError`,
+    so callers written against earlier versions keep working.
+    """
+
+
 class ResponseDecodeError(ConnectionError):
     """The bridge responded over HTTP but the body could not be decoded as JSON.
 
