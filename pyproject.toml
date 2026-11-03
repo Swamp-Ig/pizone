@@ -83,6 +83,8 @@ ignore_errors = true
 required-version = ">=0.17.3"
 target-version = "py314"
 src = ["pizone", "tests"]
+# Reporters run the probe on whatever python3 they have.
+per-file-target-version = { "scripts/izone_v1_probe.py" = "py310" }
 
 [tool.ruff.lint]
 select = [
@@ -230,6 +232,9 @@ split-on-trailing-comma = false
   "D",      # do not enforce docstring style in tests
 ]
 "scripts/**" = ["T20", "INP001"]
+"scripts/izone_v1_probe.py" = [
+  "TID251", # __future__ annotations keep the probe runnable before Python 3.14
+]
 
 [tool.hatch.version]
 source = "vcs"

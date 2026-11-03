@@ -23,16 +23,17 @@ Stop Home Assistant / other iZone listeners first if UDP bind on :7005 fails.
 from __future__ import annotations
 
 import argparse
+import contextlib
+from dataclasses import dataclass
 import ipaddress
 import json
 import re
 import socket
 import sys
 import time
+from typing import Any
 import urllib.error
 import urllib.request
-from typing import Any
-
 
 TIMEOUT = 10.0
 DISCOVERY_PORT = 12107
@@ -46,10 +47,18 @@ _IPV6_CANDIDATE = re.compile(
     r"|\[?[0-9a-fA-F:]*::[0-9a-fA-F:]*(?:%[0-9A-Za-z._-]+)?\]?"
 )
 
-# Set from ``main``; when False, ``_print`` strips network ids from every line.
-_SHOW_IPS = False
-# Exact CLI host (IP or hostname), redacted as a substring wherever it appears.
-_HOST_TOKEN: str | None = None
+
+@dataclass
+class _Redaction:
+    """Output redaction settings, filled in by ``main``."""
+
+    # When False, ``_print`` strips network ids from every line.
+    show_ips: bool = False
+    # Exact CLI host (IP or hostname), redacted as a substring wherever it appears.
+    host_token: str | None = None
+
+
+_REDACTION = _Redaction()
 
 
 def _redact_ipv6_match(match: re.Match[str]) -> str:
@@ -66,11 +75,12 @@ def _redact_ipv6_match(match: re.Match[str]) -> str:
 
 def _redact_network(text: str) -> str:
     """Redact CLI host, IPv4/IPv6 literals (e.g. UDP ``IP_…`` payloads)."""
-    if _HOST_TOKEN:
-        text = re.sub(re.escape(_HOST_TOKEN), REDACTED, text, flags=re.IGNORECASE)
+    host_token = _REDACTION.host_token
+    if host_token:
+        text = re.sub(re.escape(host_token), REDACTED, text, flags=re.IGNORECASE)
         # urllib IPv6 URL form http://[fe80::1]/...
         text = re.sub(
-            re.escape(f"[{_HOST_TOKEN}]"),
+            re.escape(f"[{host_token}]"),
             f"[{REDACTED}]",
             text,
             flags=re.IGNORECASE,
@@ -81,12 +91,12 @@ def _redact_network(text: str) -> str:
 
 def _fmt_addr(addr: str) -> str:
     """Format a socket address for logs (always redacted unless ``--show-ips``)."""
-    return addr if _SHOW_IPS else REDACTED
+    return addr if _REDACTION.show_ips else REDACTED
 
 
 def _print(*args: object, **kwargs: Any) -> None:
     """Print to stdout, redacting network ids unless ``--show-ips``."""
-    if _SHOW_IPS:
+    if _REDACTION.show_ips:
         print(*args, **kwargs)
         return
     print(
@@ -140,13 +150,12 @@ def _show(
             _print(json.dumps(parsed, indent=2, ensure_ascii=False))
             return
     snippet = body if len(body) <= 1200 else body[:1200] + f"… ({len(body)} chars)"
-    _print(snippet if snippet else "(empty body)")
+    _print(snippet or "(empty body)")
 
 
 def _parse_jsonish(body: str) -> Any:
     text = body
-    if text.endswith("{OK}"):
-        text = text[:-4]
+    text = text.removesuffix("{OK}")
     if not text.strip():
         return None
     try:
@@ -176,6 +185,15 @@ def _v1_zone_groups(zone_count: int) -> list[str]:
     if n > 12:
         paths.append("Zones13_14")
     return paths
+
+
+def _send_iasd(sock: socket.socket, addr: tuple[str, int]) -> None:
+    try:
+        sock.sendto(IASD, addr)
+    except OSError as ex:
+        _print(f"send IASD → {_fmt_addr(addr[0])}:{addr[1]} failed: {ex}")
+        return
+    _print(f"sent IASD → {_fmt_addr(addr[0])}:{addr[1]}")
 
 
 def _udp_listen(
@@ -208,18 +226,14 @@ def _udp_listen(
     sock.settimeout(0.5)
     if send_iasd:
         for addr in (("255.255.255.255", DISCOVERY_PORT), (host, DISCOVERY_PORT)):
-            try:
-                sock.sendto(IASD, addr)
-                _print(f"sent IASD → {_fmt_addr(addr[0])}:{addr[1]}")
-            except OSError as ex:
-                _print(f"send IASD → {_fmt_addr(addr[0])}:{addr[1]} failed: {ex}")
+            _send_iasd(sock, addr)
 
     deadline = time.monotonic() + listen_seconds
     count = 0
     while time.monotonic() < deadline:
         try:
             data, addr = sock.recvfrom(4096)
-        except socket.timeout:
+        except TimeoutError:
             continue
         except OSError as ex:
             _print(f"recv failed: {ex}")
@@ -239,7 +253,7 @@ def _udp_listen(
     sock.close()
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host", help="Bridge IP address")
     parser.add_argument(
@@ -279,33 +293,19 @@ def main() -> int:
         action="store_true",
         help="Leave host/IP addresses in stdout (local debug only; do not attach)",
     )
-    args = parser.parse_args()
-    global _SHOW_IPS, _HOST_TOKEN
-    _SHOW_IPS = args.show_ips
-    host = args.host.strip().strip("[]")
-    _HOST_TOKEN = host or None
-    base = f"http://{host}" if ":" not in host else f"http://[{host}]"
-    ct_modes = [False]
-    if args.with_content_type:
-        ct_modes.append(True)
+    return parser.parse_args()
 
-    _print(f"iZone V1/V2 probe against {host}")
-    _print(f"python={sys.version.split()[0]}  timeout={TIMEOUT}s")
 
-    if not args.skip_udp:
-        _udp_listen(
-            host,
-            args.udp_seconds,
-            send_iasd=True,
-            label="UDP discovery ping",
-        )
-
-    # --- V1 system inventory ---
+def _probe_v1_inventory(
+    base: str,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], int]:
+    """GET V1 SystemSettings and zone groups; return settings, zones, zone count."""
     status, body, dt, err = _req("GET", f"{base}/SystemSettings", content_type=False)
     _show("GET /SystemSettings (V1 inventory)", status, body, dt, err, full=True)
-    settings = _parse_jsonish(body) if status == 200 else None
+    parsed = _parse_jsonish(body) if status == 200 else None
+    settings = parsed if isinstance(parsed, dict) else None
     zone_count = 0
-    if isinstance(settings, dict):
+    if settings is not None:
         try:
             zone_count = int(settings.get("NoOfZones") or 0)
         except (TypeError, ValueError):
@@ -317,24 +317,26 @@ def main() -> int:
             f"SysMode={settings.get('SysMode')!r} SysFan={settings.get('SysFan')!r}"
         )
 
-    # --- V1 zone inventory ---
-    all_v1_zones: list[dict[str, Any]] = []
+    zones: list[dict[str, Any]] = []
     for path in _v1_zone_groups(zone_count or 8):
         status, body, dt, err = _req("GET", f"{base}/{path}", content_type=False)
         _show(f"GET /{path} (V1 inventory)", status, body, dt, err, full=True)
         if status == 200:
-            all_v1_zones.extend(_zones_as_list(_parse_jsonish(body)))
+            zones.extend(_zones_as_list(_parse_jsonish(body)))
 
-    if all_v1_zones:
+    if zones:
         _print("\n=== V1 zone summary ===")
-        for z in all_v1_zones:
+        for z in zones:
             _print(
                 f"  idx={z.get('Index')} name={z.get('Name')!r} "
                 f"type={z.get('Type')!r} mode={z.get('Mode')!r} "
                 f"setpoint={z.get('SetPoint')!r} temp={z.get('Temp')!r}"
             )
+    return settings, zones, zone_count
 
-    # --- V2 system + zones inventory ---
+
+def _probe_v2_inventory(base: str, zone_count: int, *, with_content_type: bool) -> None:
+    """POST V2 SystemV2 and per-zone ZonesV2 requests."""
     status, body, dt, err = _req(
         "POST",
         f"{base}/iZoneRequestV2",
@@ -350,22 +352,18 @@ def main() -> int:
         full=True,
     )
     parsed = _parse_jsonish(body) if status == 200 else None
-    if isinstance(parsed, dict):
-        sys_v2 = parsed.get("SystemV2")
-        if isinstance(sys_v2, dict):
-            _print(
-                f"\nV2 summary: UID={parsed.get('AirStreamDeviceUId')!r} "
-                f"SysOn={sys_v2.get('SysOn')!r} SysMode={sys_v2.get('SysMode')!r} "
-                f"SysFan={sys_v2.get('SysFan')!r} NoOfZones={sys_v2.get('NoOfZones')!r}"
-            )
-            try:
-                zone_count = max(zone_count, int(sys_v2.get("NoOfZones") or 0))
-            except (TypeError, ValueError):
-                pass
+    sys_v2 = parsed.get("SystemV2") if isinstance(parsed, dict) else None
+    if isinstance(parsed, dict) and isinstance(sys_v2, dict):
+        _print(
+            f"\nV2 summary: UID={parsed.get('AirStreamDeviceUId')!r} "
+            f"SysOn={sys_v2.get('SysOn')!r} SysMode={sys_v2.get('SysMode')!r} "
+            f"SysFan={sys_v2.get('SysFan')!r} NoOfZones={sys_v2.get('NoOfZones')!r}"
+        )
+        with contextlib.suppress(TypeError, ValueError):
+            zone_count = max(zone_count, int(sys_v2.get("NoOfZones") or 0))
 
     # Prefer V2 zone count when present; fall back to V1 / 8
-    v2_zones = zone_count or 8
-    for idx in range(v2_zones):
+    for idx in range(zone_count or 8):
         status, body, dt, err = _req(
             "POST",
             f"{base}/iZoneRequestV2",
@@ -381,8 +379,7 @@ def main() -> int:
             full=True,
         )
 
-    # --- Content-Type comparison on V2 request (before skip-writes) ---
-    if args.with_content_type:
+    if with_content_type:
         status, body, dt, err = _req(
             "POST",
             f"{base}/iZoneRequestV2",
@@ -398,81 +395,81 @@ def main() -> int:
             full=True,
         )
 
-    if args.skip_writes:
-        _print("\n(--skip-writes) Done. Please attach the log on the issue. Thanks!")
-        return 0
 
-    # --- safe writes ---
-    if not isinstance(settings, dict):
-        _print("\nSkipping V1 write probes — SystemSettings missing/unparsed.")
-        _print("\nDone. Please attach the log on the issue. Thanks!")
-        return 0
-
+def _probe_system_on(
+    base: str, settings: dict[str, Any], ct_modes: list[bool], *, mutate: bool
+) -> None:
+    """Re-send the current SystemON state, or toggle and restore with --mutate."""
     sys_on = settings.get("SysOn")
-    if sys_on in ("on", "off"):
-        target = sys_on
-        if args.mutate:
-            target = "off" if sys_on == "on" else "on"
-            _print(f"\n--mutate: toggling SystemON {sys_on!r} → {target!r}")
-        payload = {"SystemON": target}
-        for use_ct in ct_modes:
-            label = (
-                f"POST /SystemON {{{target!r}}} (no-op)"
-                if target == sys_on
-                else f"POST /SystemON {{{target!r}}} (mutate)"
-            )
-            if use_ct:
-                label += " + Content-Type"
-            status, body, dt, err = _req(
-                "POST", f"{base}/SystemON", payload, content_type=use_ct
-            )
-            _show(label, status, body, dt, err)
-            if args.mutate and target != sys_on and status == 200:
-                status, body, dt, err = _req(
-                    "POST",
-                    f"{base}/SystemON",
-                    {"SystemON": sys_on},
-                    content_type=use_ct,
-                )
-                _show(
-                    f"POST /SystemON restore {{{sys_on!r}}}"
-                    + (" + Content-Type" if use_ct else ""),
-                    status,
-                    body,
-                    dt,
-                    err,
-                )
-    else:
+    if sys_on not in ("on", "off"):
         _print(f"\nSkipping SystemON write — unexpected SysOn={sys_on!r}")
-
-    # Zone no-op from inventoried V1 zones
-    z_match = next(
-        (z for z in all_v1_zones if z.get("Index") == args.zone - 1),
-        all_v1_zones[args.zone - 1] if len(all_v1_zones) >= args.zone else None,
-    )
-    if z_match is not None:
-        mode = z_match.get("Mode")
-        setpoint = z_match.get("SetPoint")
-        if mode == "auto" and setpoint is not None:
-            command: Any = setpoint
-        elif mode in ("open", "close"):
-            command = mode
-        else:
-            command = mode if mode is not None else setpoint
-        payload = {
-            "ZoneCommand": {"ZoneNo": str(args.zone), "Command": str(command)}
-        }
-        for use_ct in ct_modes:
-            label = f"POST /ZoneCommand zone={args.zone} Command={command!r} (no-op)"
-            if use_ct:
-                label += " + Content-Type"
+        return
+    target = sys_on
+    if mutate:
+        target = "off" if sys_on == "on" else "on"
+        _print(f"\n--mutate: toggling SystemON {sys_on!r} → {target!r}")
+    payload = {"SystemON": target}
+    for use_ct in ct_modes:
+        label = (
+            f"POST /SystemON {{{target!r}}} (no-op)"
+            if target == sys_on
+            else f"POST /SystemON {{{target!r}}} (mutate)"
+        )
+        if use_ct:
+            label += " + Content-Type"
+        status, body, dt, err = _req(
+            "POST", f"{base}/SystemON", payload, content_type=use_ct
+        )
+        _show(label, status, body, dt, err)
+        if mutate and target != sys_on and status == 200:
             status, body, dt, err = _req(
-                "POST", f"{base}/ZoneCommand", payload, content_type=use_ct
+                "POST",
+                f"{base}/SystemON",
+                {"SystemON": sys_on},
+                content_type=use_ct,
             )
-            _show(label, status, body, dt, err)
-    else:
-        _print(f"\nSkipping ZoneCommand — no V1 zone data for zone {args.zone}")
+            _show(
+                f"POST /SystemON restore {{{sys_on!r}}}"
+                + (" + Content-Type" if use_ct else ""),
+                status,
+                body,
+                dt,
+                err,
+            )
 
+
+def _probe_zone_command(
+    base: str, zones: list[dict[str, Any]], zone: int, ct_modes: list[bool]
+) -> None:
+    """Re-send the current command for one inventoried V1 zone."""
+    z_match = next(
+        (z for z in zones if z.get("Index") == zone - 1),
+        zones[zone - 1] if len(zones) >= zone else None,
+    )
+    if z_match is None:
+        _print(f"\nSkipping ZoneCommand — no V1 zone data for zone {zone}")
+        return
+    mode = z_match.get("Mode")
+    setpoint = z_match.get("SetPoint")
+    if mode == "auto" and setpoint is not None:
+        command: Any = setpoint
+    elif mode in ("open", "close"):
+        command = mode
+    else:
+        command = mode if mode is not None else setpoint
+    payload = {"ZoneCommand": {"ZoneNo": str(zone), "Command": str(command)}}
+    for use_ct in ct_modes:
+        label = f"POST /ZoneCommand zone={zone} Command={command!r} (no-op)"
+        if use_ct:
+            label += " + Content-Type"
+        status, body, dt, err = _req(
+            "POST", f"{base}/ZoneCommand", payload, content_type=use_ct
+        )
+        _show(label, status, body, dt, err)
+
+
+def _probe_system_fan(base: str, ct_modes: list[bool]) -> None:
+    """POST an out-of-spec V1 SystemFAN value to see how the bridge rejects it."""
     for use_ct in ct_modes:
         label = 'POST /SystemFAN {"SystemFAN":"top"} (V1 out-of-spec probe)'
         if use_ct:
@@ -484,6 +481,43 @@ def main() -> int:
             content_type=use_ct,
         )
         _show(label, status, body, dt, err)
+
+
+def main() -> int:
+    """Run the probe against the bridge given on the command line."""
+    args = _parse_args()
+    _REDACTION.show_ips = args.show_ips
+    host = args.host.strip().strip("[]")
+    _REDACTION.host_token = host or None
+    base = f"http://{host}" if ":" not in host else f"http://[{host}]"
+    ct_modes = [False, True] if args.with_content_type else [False]
+
+    _print(f"iZone V1/V2 probe against {host}")
+    _print(f"python={sys.version.split()[0]}  timeout={TIMEOUT}s")
+
+    if not args.skip_udp:
+        _udp_listen(
+            host,
+            args.udp_seconds,
+            send_iasd=True,
+            label="UDP discovery ping",
+        )
+
+    settings, zones, zone_count = _probe_v1_inventory(base)
+    _probe_v2_inventory(base, zone_count, with_content_type=args.with_content_type)
+
+    if args.skip_writes:
+        _print("\n(--skip-writes) Done. Please attach the log on the issue. Thanks!")
+        return 0
+
+    if settings is None:
+        _print("\nSkipping V1 write probes — SystemSettings missing/unparsed.")
+        _print("\nDone. Please attach the log on the issue. Thanks!")
+        return 0
+
+    _probe_system_on(base, settings, ct_modes, mutate=args.mutate)
+    _probe_zone_command(base, zones, args.zone, ct_modes)
+    _probe_system_fan(base, ct_modes)
 
     # Brief post-write listen for iZoneChanged_* (no second IASD)
     if not args.skip_udp:
@@ -500,4 +534,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
