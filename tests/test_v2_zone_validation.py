@@ -25,7 +25,7 @@ async def controller() -> AsyncIterator[MockController]:
     ctrl._read_api = "v2"
     ctrl.v2_system = deepcopy(SAMPLE_SYSTEM_V2)
     ctrl.v2_zones = deepcopy(SAMPLE_ZONES_V2)
-    svc._controllers[ctrl.device_uid] = ctrl
+    svc._claim(ctrl)
     try:
         await ctrl._initialize(
             system_settings=v2.system_v2_to_settings(

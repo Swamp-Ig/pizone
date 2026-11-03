@@ -41,7 +41,7 @@ def test_missing_fan_type_is_not_two_speed(missing: bool) -> None:
 async def test_wire_ras_selects_correct_setpoint_owner(
     service: MockDiscoveryService, raw: int, unit_owns: bool
 ) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     system = {**SAMPLE_SYSTEM_V2["SystemV2"], "RAS": raw, "CtrlZone": 1}
     normalized = v2.system_v2_to_settings(system, controller.device_uid)
     controller._system_settings.update(

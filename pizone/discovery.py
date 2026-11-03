@@ -13,7 +13,9 @@ from asyncio import (
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum, auto
 from ipaddress import IPv4Interface
 import json
 import logging
@@ -78,6 +80,21 @@ class LogExceptions:
         return True
 
 
+class _State(Enum):
+    """Lifecycle of one controller UID in the discovery registry."""
+
+    KNOWN = auto()  # Discovered and unclaimed.
+    CLAIMING = auto()  # create_controller() in flight.
+    CLAIMED = auto()  # A live controller owns it.
+
+
+@dataclass(slots=True)
+class _Entry:
+    state: _State
+    endpoint: ControllerEndpoint
+    controller: Controller | None = None  # CLAIMED only
+
+
 class DiscoveryService:
     """UDP discovery, endpoint registry, and controller factory.
 
@@ -109,15 +126,10 @@ class DiscoveryService:
         """
         self._close_task: Task[Any] | None = None
 
-        # Endpoint ownership (UID is identity; host may move).
-        # _known_endpoints: heard about, unclaimed (UDP and/or discover_by_*).
-        # _claimed_endpoints: create_controller claimed; removed on Controller.close().
-        # No stale/disappear tracking — notify is unverified UDP; create re-probes.
+        # One entry per UID (identity; host may move). No stale/disappear
+        # tracking — notify is unverified UDP; create re-probes.
         self._on_endpoint_discovered = on_endpoint_discovered
-        self._known_endpoints: dict[str, ControllerEndpoint] = {}
-        self._claimed_endpoints: dict[str, ControllerEndpoint] = {}
-        # Live controllers for claimed UIDs (address-change routing).
-        self._controllers: dict[str, Controller] = {}
+        self._endpoints: dict[str, _Entry] = {}
         # Ring buffer of recent inbound UDP datagrams (diagnostics).
         self._recent_udp: deque[dict[str, Any]] = deque(maxlen=UDP_REPLY_BUFFER_SIZE)
         self._scan_collector: dict[str, str] | None = None
@@ -248,23 +260,50 @@ class DiscoveryService:
 
         asyncio.get_running_loop().create_task(_run())
 
-    def _ensure_endpoint_available(self, endpoint: ControllerEndpoint) -> None:
-        """Raise if *endpoint* is already claimed."""
-        if endpoint.uid in self._claimed_endpoints:
-            raise ControllerAlreadyClaimedError(
-                f"Controller {endpoint.uid} already created"
-            )
+    def _entry(self, uid: str, *states: _State) -> _Entry | None:
+        """Return the entry for *uid* when it is in one of *states*."""
+        entry = self._endpoints.get(uid)
+        if entry is None or entry.state not in states:
+            return None
+        return entry
 
-    def _claim_endpoint(self, endpoint: ControllerEndpoint) -> None:
-        """Move an endpoint from discovered to claimed."""
-        self._ensure_endpoint_available(endpoint)
-        self._known_endpoints.pop(endpoint.uid, None)
-        self._claimed_endpoints[endpoint.uid] = endpoint
+    def _entry_by_host(self, host: str, *states: _State) -> _Entry | None:
+        """Return the first entry at *host* in one of *states*."""
+        for entry in self._endpoints.values():
+            if entry.endpoint.host == host and entry.state in states:
+                return entry
+        return None
+
+    def _endpoints_in(self, state: _State) -> dict[str, ControllerEndpoint]:
+        """Return a snapshot of endpoints in *state*, keyed by UID."""
+        return {
+            uid: entry.endpoint
+            for uid, entry in self._endpoints.items()
+            if entry.state is state
+        }
+
+    def _controller(self, uid: str) -> Controller | None:
+        """Return the live controller that claimed *uid*, if any."""
+        entry = self._entry(uid, _State.CLAIMED)
+        return entry.controller if entry is not None else None
+
+    def _ensure_uid_available(self, uid: str) -> None:
+        """Raise if *uid* is claimed or being claimed."""
+        if self._entry(uid, _State.CLAIMING, _State.CLAIMED) is not None:
+            raise ControllerAlreadyClaimedError(f"Controller {uid} already created")
+
+    def _claim(self, controller: Controller) -> None:
+        """Record *controller* as the owner of its UID."""
+        self._endpoints[controller.device_uid] = _Entry(
+            _State.CLAIMED,
+            ControllerEndpoint(uid=controller.device_uid, host=controller.device_ip),
+            controller,
+        )
 
     def _cache_endpoint(self, endpoint: ControllerEndpoint) -> None:
         """Remember an unclaimed endpoint for later discovery calls."""
-        self._ensure_endpoint_available(endpoint)
-        self._known_endpoints[endpoint.uid] = endpoint
+        self._ensure_uid_available(endpoint.uid)
+        self._endpoints[endpoint.uid] = _Entry(_State.KNOWN, endpoint)
 
     def _emit_endpoint_discovered(self, endpoint: ControllerEndpoint) -> None:
         """Invoke on_endpoint_discovered and record uid for discover_all dedupe."""
@@ -273,14 +312,6 @@ class DiscoveryService:
                 self._on_endpoint_discovered(endpoint)
         if self._discover_all_notified is not None:
             self._discover_all_notified.add(endpoint.uid)
-
-    def _endpoint_by_host(
-        self, endpoints: dict[str, ControllerEndpoint], host: str
-    ) -> ControllerEndpoint | None:
-        for endpoint in endpoints.values():
-            if endpoint.host == host:
-                return endpoint
-        return None
 
     async def discover_by_host(self, host: str) -> ControllerEndpoint | None:
         """Return a known endpoint for *host*, or HTTP-probe if unseen.
@@ -292,14 +323,14 @@ class DiscoveryService:
                 the endpoint is not cached.
 
         """
-        claimed = self._endpoint_by_host(self._claimed_endpoints, host)
+        claimed = self._entry_by_host(host, _State.CLAIMING, _State.CLAIMED)
         if claimed is not None:
             raise ControllerAlreadyClaimedError(
-                f"Controller {claimed.uid} already created"
+                f"Controller {claimed.endpoint.uid} already created"
             )
-        known = self._endpoint_by_host(self._known_endpoints, host)
+        known = self._entry_by_host(host, _State.KNOWN)
         if known is not None:
-            return known
+            return known.endpoint
 
         probed = await self._probe(host)
         if probed is None:
@@ -318,16 +349,19 @@ class DiscoveryService:
 
         """
         raise_if_placeholder_uid(uid)
-        if uid in self._claimed_endpoints:
-            raise ControllerAlreadyClaimedError(f"Controller {uid} already created")
-        endpoint = self._known_endpoints.get(uid)
+        self._ensure_uid_available(uid)
+        if (known := self._entry(uid, _State.KNOWN)) is not None:
+            return known.endpoint
+        endpoint = await self._scan_for_uid(uid)
         if endpoint is not None:
-            return endpoint
+            self._cache_endpoint(endpoint)
+        return endpoint
 
+    async def _scan_for_uid(self, uid: str) -> ControllerEndpoint | None:
+        """Broadcast IASD, wait for *uid*, and HTTP-verify it (no caching)."""
         async with self._discover_lock:
-            endpoint = self._known_endpoints.get(uid)
-            if endpoint is not None:
-                return endpoint
+            if (known := self._entry(uid, _State.KNOWN)) is not None:
+                return known.endpoint
 
             collector: dict[str, str] = {}
             self._scan_collector = collector
@@ -346,7 +380,6 @@ class DiscoveryService:
                 return None
             if probed.endpoint.uid != uid:
                 return None
-            self._cache_endpoint(probed.endpoint)
             return probed.endpoint
 
     async def discover_all(self) -> list[ControllerEndpoint]:
@@ -362,7 +395,8 @@ class DiscoveryService:
             notified: set[str] = set()
             self._discover_all_notified = notified
             collector: dict[str, str] = {
-                uid: endpoint.host for uid, endpoint in self._known_endpoints.items()
+                uid: endpoint.host
+                for uid, endpoint in self._endpoints_in(_State.KNOWN).items()
             }
             self._scan_collector = collector
             try:
@@ -417,24 +451,41 @@ class DiscoveryService:
 
         """
         raise_if_placeholder_uid(uid)
-        if uid in self._claimed_endpoints:
-            raise ControllerAlreadyClaimedError(f"Controller {uid} already created")
+        self._ensure_uid_available(uid)
+        prior = self._endpoints.get(uid)
+        # Reserve the UID before the first await so overlapping calls fail fast.
+        self._endpoints[uid] = _Entry(
+            _State.CLAIMING, ControllerEndpoint(uid=uid, host=host)
+        )
         pending_address_changed: ControllerEndpoint | None = None
+        fallback: ControllerEndpoint | None = None
 
         try:
-            controller = await self._connect_controller_at(
-                uid, host, on_address_changed=on_address_changed
-            )
-        except ConnectionError:
-            endpoint = await self.discover_by_uid(uid)
-            if endpoint is None or endpoint.host == host:
-                raise
-            pending_address_changed = ControllerEndpoint(uid=uid, host=endpoint.host)
-            controller = await self._connect_controller_at(
-                uid,
-                endpoint.host,
-                on_address_changed=on_address_changed,
-            )
+            try:
+                controller = await self._connect_controller_at(
+                    uid, host, on_address_changed=on_address_changed
+                )
+            except ConnectionError:
+                if prior is not None:
+                    fallback = prior.endpoint
+                else:
+                    fallback = await self._scan_for_uid(uid)
+                if fallback is None or fallback.host == host:
+                    raise
+                pending_address_changed = fallback
+                controller = await self._connect_controller_at(
+                    uid,
+                    fallback.host,
+                    on_address_changed=on_address_changed,
+                )
+        except BaseException:
+            if fallback is not None:
+                self._endpoints[uid] = _Entry(_State.KNOWN, fallback)
+            elif prior is not None:
+                self._endpoints[uid] = prior
+            else:
+                del self._endpoints[uid]
+            raise
 
         if pending_address_changed is not None and on_address_changed is not None:
             self.schedule_address_changed(on_address_changed, pending_address_changed)
@@ -446,9 +497,8 @@ class DiscoveryService:
         endpoint: ControllerEndpoint,
     ) -> None:
         """Schedule a one-shot address-changed callback after the caller returns."""
-        claimed = self._claimed_endpoints.get(endpoint.uid)
-        if claimed is not None:
-            self._claimed_endpoints[endpoint.uid] = endpoint
+        if (claimed := self._entry(endpoint.uid, _State.CLAIMED)) is not None:
+            claimed.endpoint = endpoint
         asyncio.get_running_loop().create_task(
             _invoke_address_changed(callback, endpoint)
         )
@@ -471,22 +521,17 @@ class DiscoveryService:
             probe=probed,
             on_address_changed=on_address_changed,
         )
-        self._controllers[uid] = controller
-        self._claim_endpoint(probed.endpoint)
+        self._claim(controller)
         return controller
-
-    def _release_endpoint(self, endpoint: ControllerEndpoint) -> None:
-        """Move a claimed endpoint back to the discovered pool."""
-        if endpoint.uid not in self._claimed_endpoints:
-            return
-        self._claimed_endpoints.pop(endpoint.uid)
-        self._known_endpoints[endpoint.uid] = endpoint
 
     def _controller_closed(self, controller: Controller) -> None:
         """Release a closed controller back to the unclaimed endpoint cache."""
-        self._controllers.pop(controller.device_uid, None)
-        self._release_endpoint(
-            ControllerEndpoint(uid=controller.device_uid, host=controller.device_ip)
+        entry = self._entry(controller.device_uid, _State.CLAIMED)
+        if entry is None or entry.controller is not controller:
+            return
+        self._endpoints[controller.device_uid] = _Entry(
+            _State.KNOWN,
+            ControllerEndpoint(uid=controller.device_uid, host=controller.device_ip),
         )
 
     async def _probe(self, host: str) -> ControllerProbe | None:
@@ -603,12 +648,10 @@ class DiscoveryService:
         recent inbound UDP datagrams (excluding our own IASD echo).
         """
 
-        def _endpoints(
-            endpoints: dict[str, ControllerEndpoint],
-        ) -> list[dict[str, str]]:
+        def _endpoints(state: _State) -> list[dict[str, str]]:
             return [
                 {"uid": endpoint.uid, "host": endpoint.host}
-                for endpoint in endpoints.values()
+                for endpoint in self._endpoints_in(state).values()
             ]
 
         recent_udp = [
@@ -624,8 +667,9 @@ class DiscoveryService:
         return {
             "closed": self.is_closed,
             "udp_bound": self._transport is not None and not self.is_closed,
-            "claimed": _endpoints(self._claimed_endpoints),
-            "known": _endpoints(self._known_endpoints),
+            "claiming": _endpoints(_State.CLAIMING),
+            "claimed": _endpoints(_State.CLAIMED),
+            "known": _endpoints(_State.KNOWN),
             "recent_udp": recent_udp,
         }
 
@@ -701,20 +745,18 @@ class DiscoveryService:
         if self._scan_collector is not None:
             self._scan_collector[endpoint.uid] = endpoint.host
 
-        claimed = self._claimed_endpoints.get(endpoint.uid)
-        if claimed is not None:
-            if claimed.host != endpoint.host:
-                self._claimed_endpoints[endpoint.uid] = endpoint
-                controller = self._controllers.get(endpoint.uid)
-                if controller is not None:
-                    controller._refresh_address(endpoint.host)  # noqa: SLF001
+        entry = self._endpoints.get(endpoint.uid)
+        if entry is not None and entry.state is _State.CLAIMING:
+            return
+        if entry is not None and entry.state is _State.CLAIMED:
+            if entry.endpoint.host != endpoint.host:
+                entry.endpoint = endpoint
+                if entry.controller is not None:
+                    entry.controller._refresh_address(endpoint.host)  # noqa: SLF001
             return
 
-        previous = self._known_endpoints.get(endpoint.uid)
-        newly_seen = previous is None
-        host_changed = previous is not None and previous.host != endpoint.host
         self._cache_endpoint(endpoint)
-        if newly_seen or host_changed:
+        if entry is None or entry.endpoint.host != endpoint.host:
             self._emit_endpoint_discovered(endpoint)
 
 

@@ -18,7 +18,7 @@ from pizone import (
     create_discovery,
 )
 from pizone.const import PLACEHOLDER_DEVICE_UID
-from pizone.discovery import DiscoveryService
+from pizone.discovery import DiscoveryService, _State
 from pizone.types import ControllerProbe
 
 from .conftest import MockController, MockDiscoveryService
@@ -418,9 +418,7 @@ async def test_discover_all_notifies_known_without_new_datagram() -> None:
         ClientSession,
         FakeHttpSession(get_response=_system_settings_response("000025841")),
     )
-    service._known_endpoints["000025841"] = ControllerEndpoint(
-        uid="000025841", host="10.0.0.90"
-    )
+    service._cache_endpoint(ControllerEndpoint(uid="000025841", host="10.0.0.90"))
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
 
@@ -495,7 +493,7 @@ async def test_passive_asport_notifies_on_host_change() -> None:
         ControllerEndpoint(uid="000025841", host="10.0.0.90"),
         ControllerEndpoint(uid="000025841", host="10.0.0.91"),
     ]
-    assert service._known_endpoints["000025841"].host == "10.0.0.91"
+    assert service._endpoints_in(_State.KNOWN)["000025841"].host == "10.0.0.91"
     await service.close()
 
 
@@ -521,7 +519,7 @@ async def test_claimed_asport_host_change_fires_on_address_changed() -> None:
 
     assert controller.device_ip == "10.0.0.91"
     assert seen == [ControllerEndpoint(uid="000025841", host="10.0.0.91")]
-    assert service._claimed_endpoints["000025841"].host == "10.0.0.91"
+    assert service._endpoints_in(_State.CLAIMED)["000025841"].host == "10.0.0.91"
     await service.close()
 
 
@@ -563,7 +561,7 @@ async def test_close_does_not_fire_on_endpoint_discovered() -> None:
     await controller.close()
 
     assert discovered == []
-    assert "000025841" in service._known_endpoints
+    assert "000025841" in service._endpoints_in(_State.KNOWN)
     await service.close()
 
 
@@ -578,7 +576,7 @@ async def test_changed_datagrams_ignored_on_14_path() -> None:
     service._process_datagram(b"iZoneChanged_Schedules", ("10.0.0.90", 12107))
 
     assert discovered == []
-    assert service._known_endpoints == {}
+    assert service._endpoints_in(_State.KNOWN) == {}
     await service.close()
 
 
@@ -651,10 +649,10 @@ async def test_discover_all_includes_closed_controllers() -> None:
     )
     controller = await service.create_controller("000025841", "10.0.0.90")
     await controller.close()
-    assert service._known_endpoints["000025841"] == ControllerEndpoint(
+    assert service._endpoints_in(_State.KNOWN)["000025841"] == ControllerEndpoint(
         uid="000025841", host="10.0.0.90"
     )
-    assert "000025841" not in service._claimed_endpoints
+    assert "000025841" not in service._endpoints_in(_State.CLAIMED)
     with (
         patch("pizone.discovery.asyncio.sleep", AsyncMock()),
         patch.object(service, "scan", AsyncMock()),
@@ -688,10 +686,10 @@ async def test_create_controller_success() -> None:
     assert controller.mode == Controller.Mode.HEAT
     assert controller.fan == Controller.Fan.AUTO
     assert controller.zones == []
-    assert service._claimed_endpoints["000025841"] == ControllerEndpoint(
+    assert service._endpoints_in(_State.CLAIMED)["000025841"] == ControllerEndpoint(
         uid="000025841", host="10.0.0.90"
     )
-    assert "000025841" not in service._known_endpoints
+    assert "000025841" not in service._endpoints_in(_State.KNOWN)
     assert session.get_calls == 1
     await service.close()
 
@@ -706,6 +704,125 @@ async def test_create_controller_raises_if_uid_exists() -> None:
     await service.create_controller("000025841", "10.0.0.90")
     with pytest.raises(ControllerAlreadyClaimedError, match="already created"):
         await service.create_controller("000025841", "10.0.0.90")
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_create_controller_rejects_overlapping_claim() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    discovered: list[ControllerEndpoint] = []
+    service._on_endpoint_discovered = discovered.append
+    gate = asyncio.Event()
+    real_probe = service._probe
+
+    async def gated_probe(host: str) -> ControllerProbe | None:
+        await gate.wait()
+        return await real_probe(host)
+
+    with patch.object(service, "_probe", side_effect=gated_probe) as probe:
+        first = asyncio.create_task(service.create_controller("000025841", "10.0.0.90"))
+        await asyncio.sleep(0)
+        assert service.dump_state()["claiming"] == [
+            {"uid": "000025841", "host": "10.0.0.90"}
+        ]
+
+        with pytest.raises(ControllerAlreadyClaimedError, match="already created"):
+            await service.create_controller("000025841", "10.0.0.90")
+        # A reply mid-claim neither notifies nor replaces the reservation.
+        service._process_datagram(
+            b"ASPort_12107,Mac_000025841,IP_10.0.0.91,iZone", ("10.0.0.91", 12107)
+        )
+
+        gate.set()
+        controller = await first
+
+    assert probe.await_count == 1
+    assert discovered == []
+    assert service._controller("000025841") is controller
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prior", "expected"),
+    [
+        pytest.param(None, {}, id="no-prior-entry"),
+        pytest.param(
+            ControllerEndpoint(uid="000025841", host="10.0.0.90"),
+            {"000025841": ControllerEndpoint(uid="000025841", host="10.0.0.90")},
+            id="prior-known-entry",
+        ),
+    ],
+)
+async def test_create_controller_failure_restores_entry(
+    prior: ControllerEndpoint | None,
+    expected: dict[str, ControllerEndpoint],
+) -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession, FakeHttpSession(get_error=OSError("unreachable"))
+    )
+    if prior is not None:
+        service._cache_endpoint(prior)
+
+    with (
+        patch.object(service, "_scan_for_uid", AsyncMock(return_value=None)),
+        pytest.raises(ConnectionError),
+    ):
+        await service.create_controller("000025841", "10.0.0.90")
+
+    assert service._endpoints_in(_State.CLAIMING) == {}
+    assert service._endpoints_in(_State.KNOWN) == expected
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_create_controller_command_error_restores_prior_entry() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    prior = ControllerEndpoint(uid="000025841", host="10.0.0.90")
+    service._cache_endpoint(prior)
+
+    with (
+        patch.object(
+            Controller,
+            "_initialize",
+            AsyncMock(side_effect=ControllerCommandError("rejected")),
+        ),
+        pytest.raises(ControllerCommandError),
+    ):
+        await service.create_controller(prior.uid, prior.host)
+
+    assert service._endpoints_in(_State.KNOWN) == {prior.uid: prior}
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_controller_closed_ignores_non_owner() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    owner = await service.create_controller("000025841", "10.0.0.90")
+    stray = MockController(
+        service,
+        device_uid="000025841",
+        device_ip="10.0.0.91",
+        is_v2=False,
+        is_ipower=False,
+    )
+
+    service._controller_closed(stray)
+
+    assert service._controller("000025841") is owner
     await service.close()
 
 
@@ -732,7 +849,7 @@ async def test_create_controller_address_fallback() -> None:
         discover_calls += 1
         return ControllerEndpoint(uid="000025841", host="10.0.0.90")
 
-    with patch.object(service, "discover_by_uid", side_effect=discover_by_uid_patched):
+    with patch.object(service, "_scan_for_uid", side_effect=discover_by_uid_patched):
         controller = await service.create_controller("000025841", "10.0.0.1")
 
     assert discover_calls == 1
@@ -754,7 +871,7 @@ async def test_create_controller_address_changed_after_return() -> None:
         return ControllerEndpoint(uid="000025841", host="10.0.0.90")
 
     with (
-        patch.object(service, "discover_by_uid", side_effect=discover_by_uid),
+        patch.object(service, "_scan_for_uid", side_effect=discover_by_uid),
         patch.object(
             service,
             "_probe",
@@ -793,7 +910,7 @@ async def test_create_controller_no_retry_on_command_error() -> None:
     )
     discover_by_uid = AsyncMock()
     with (
-        patch.object(service, "discover_by_uid", discover_by_uid),
+        patch.object(service, "_scan_for_uid", discover_by_uid),
         patch.object(
             Controller,
             "_initialize",
@@ -817,7 +934,7 @@ async def test_udp_ignores_placeholder_uid() -> None:
         ("10.0.0.111", 12107),
     )
     assert discovered == []
-    assert service._known_endpoints == {}
+    assert service._endpoints_in(_State.KNOWN) == {}
     await service.close()
 
 
@@ -831,7 +948,7 @@ async def test_discover_by_uid_placeholder_raises_without_io() -> None:
     ):
         await service.discover_by_uid(PLACEHOLDER_DEVICE_UID)
     scan.assert_not_awaited()
-    assert service._known_endpoints == {}
+    assert service._endpoints_in(_State.KNOWN) == {}
     await service.close()
 
 
@@ -857,7 +974,7 @@ async def test_discover_by_host_placeholder_raises_without_cache() -> None:
     )
     with pytest.raises(UnpairedBridgeError, match="unpaired"):
         await service.discover_by_host("10.0.0.111")
-    assert service._known_endpoints == {}
+    assert service._endpoints_in(_State.KNOWN) == {}
     await service.close()
 
 
@@ -884,7 +1001,7 @@ async def test_discover_all_omits_placeholder_uid() -> None:
         endpoints = await service.discover_all()
     assert endpoints == []
     assert discovered == []
-    assert service._known_endpoints == {}
+    assert service._endpoints_in(_State.KNOWN) == {}
     await service.close()
 
 
@@ -946,7 +1063,7 @@ async def test_create_controller_empty_v1_and_v2_error_raises() -> None:
     )
     service._session = cast(ClientSession, session)
     with (
-        patch.object(service, "discover_by_uid", AsyncMock(return_value=None)),
+        patch.object(service, "_scan_for_uid", AsyncMock(return_value=None)),
         pytest.raises(ConnectionError, match="Unable to connect"),
     ):
         await service.create_controller("000025841", "10.0.0.90")

@@ -31,7 +31,7 @@ async def controller() -> AsyncIterator[MockController]:
     ctrl.ZONE_CONFIRM_INTERVAL = 0.05
     ctrl.ZONE_CONFIRM_WINDOW = 0.35
     ctrl.ZONE_OPTIMISTIC_WINDOW = 0.1
-    svc._controllers[ctrl.device_uid] = ctrl
+    svc._claim(ctrl)
     try:
         await ctrl._initialize(
             system_settings=v2.system_v2_to_settings(

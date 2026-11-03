@@ -51,7 +51,7 @@ def _zero_zone_system_settings(device_uid: str) -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_controller_property_reads(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     assert controller.connected is True
     assert controller.power is None
@@ -79,7 +79,7 @@ async def test_controller_property_reads(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_on(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     await controller.set_on(False)
     assert controller.is_on is False
@@ -91,7 +91,7 @@ async def test_set_on(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_fan(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     fan = Controller.Fan.LOW
 
     await controller.set_fan(fan)
@@ -101,7 +101,7 @@ async def test_set_fan(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_sleep_timer(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     await controller.set_sleep_timer(30)
     assert controller.sleep_timer == 30
@@ -112,7 +112,7 @@ async def test_set_sleep_timer(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     await controller.set_temp_setpoint(22.5)
     assert controller.temp_setpoint == pytest.approx(22.5)
@@ -120,7 +120,7 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_fan_validation(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     with pytest.raises(AttributeError, match="Fan mode top not allowed"):
         await controller.set_fan(Controller.Fan.TOP)
@@ -128,7 +128,7 @@ async def test_set_fan_validation(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     with pytest.raises(AttributeError, match="Invalid Sleep Timer"):
         await controller.set_sleep_timer(45)
@@ -136,7 +136,7 @@ async def test_set_sleep_timer_validation(service: MockDiscoveryService) -> None
 
 @pytest.mark.asyncio
 async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     with pytest.raises(AttributeError, match="not rounded to nearest 0.5"):
         await controller.set_temp_setpoint(23.3)
@@ -155,7 +155,7 @@ async def test_power_disabled_by_default_skips_power_request() -> None:
         is_v2=False,
         is_ipower=True,
     )
-    svc._controllers["000000003"] = controller
+    svc._claim(controller)
 
     try:
         await controller._initialize(controller.resources["SystemSettings"])
@@ -182,7 +182,7 @@ async def test_initialize_succeeds_when_power_init_fails() -> None:
         is_ipower=True,
     )
     controller.fail_power_types.add(1)
-    svc._controllers["000000003"] = controller
+    svc._claim(controller)
 
     try:
         await controller._initialize(controller.resources["SystemSettings"])
@@ -198,7 +198,7 @@ async def test_initialize_succeeds_when_power_init_fails() -> None:
 async def test_initialize_sets_power_when_ipower_works(
     ipower_service: MockDiscoveryService,
 ) -> None:
-    controller = cast(MockController, ipower_service._controllers["000000003"])
+    controller = cast(MockController, ipower_service._controller("000000003"))
 
     assert controller.power is not None
     assert controller.power.enabled is True
@@ -209,7 +209,7 @@ async def test_initialize_sets_power_when_ipower_works(
 async def test_initialize_does_not_fetch_power_status(
     ipower_service: MockDiscoveryService,
 ) -> None:
-    controller = cast(MockController, ipower_service._controllers["000000003"])
+    controller = cast(MockController, ipower_service._controller("000000003"))
     power_requests = [
         data for command, data in controller.sent if command == "PowerRequest"
     ]
@@ -242,7 +242,7 @@ async def test_initialize_clears_ipower_when_config_disabled() -> None:
         is_ipower=True,
     )
     controller.power_config = disabled_config
-    svc._controllers["000000003"] = controller
+    svc._claim(controller)
 
     try:
         await controller._initialize(controller.resources["SystemSettings"])
@@ -265,7 +265,7 @@ async def test_power_init_probe_failure_leaves_controller_connected() -> None:
         is_ipower=True,
     )
     controller.fail_power_types.add(1)
-    svc._controllers["000000003"] = controller
+    svc._claim(controller)
 
     try:
         await controller._initialize(controller.resources["SystemSettings"])
@@ -282,7 +282,7 @@ async def test_power_init_probe_failure_leaves_controller_connected() -> None:
 async def test_power_refresh_skipped_when_bridge_disconnected(
     ipower_service: MockDiscoveryService,
 ) -> None:
-    controller = cast(MockController, ipower_service._controllers["000000003"])
+    controller = cast(MockController, ipower_service._controller("000000003"))
     assert controller.power is not None
     power_requests_before = [
         data for command, data in controller.sent if command == "PowerRequest"
@@ -302,7 +302,7 @@ async def test_power_refresh_transport_failure_marks_bridge_down(
     ipower_service: MockDiscoveryService,
 ) -> None:
     """Power refresh shares the bridge, so its transport failure settles bridge_ok."""
-    controller = cast(MockController, ipower_service._controllers["000000003"])
+    controller = cast(MockController, ipower_service._controller("000000003"))
     assert controller.power is not None
     controller.fail_power_types.add(2)
 
@@ -325,7 +325,7 @@ async def test_zero_zone_system_initializes_controller() -> None:
     )
     settings = _zero_zone_system_settings(controller.device_uid)
     controller.resources["SystemSettings"] = settings
-    svc._controllers[controller.device_uid] = controller
+    svc._claim(controller)
 
     try:
         await controller._initialize(controller.resources["SystemSettings"])
@@ -356,7 +356,7 @@ async def test_negative_zone_count_marks_izone_not_ok() -> None:
     settings = _zero_zone_system_settings(controller.device_uid)
     settings["NoOfZones"] = -1
     controller.resources["SystemSettings"] = settings
-    svc._controllers[controller.device_uid] = controller
+    svc._claim(controller)
 
     try:
         await controller._initialize(controller.resources["SystemSettings"])
@@ -371,7 +371,7 @@ async def test_negative_zone_count_marks_izone_not_ok() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_ok_true_when_izone_fault(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     healthy_fan = controller.fan
 
     controller.resources["SystemSettings"] = _fault_system_settings("000000001")
@@ -401,7 +401,7 @@ async def test_live_fault_fixtures_mark_izone_not_ok(
     fault_settings: dict[str, object],
 ) -> None:
     """Preserve live unpaired and paired cold-restart fault specimens."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     settings = deepcopy(fault_settings)
     settings["AirStreamDeviceUId"] = controller.device_uid
     controller.resources["SystemSettings"] = settings
@@ -412,7 +412,7 @@ async def test_live_fault_fixtures_mark_izone_not_ok(
 
 @pytest.mark.asyncio
 async def test_cache_preserved_on_izone_fault(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     healthy_settings = deepcopy(controller.resources["SystemSettings"])
 
     controller.resources["SystemSettings"] = _fault_system_settings("000000001")
@@ -425,7 +425,7 @@ async def test_cache_preserved_on_izone_fault(service: MockDiscoveryService) -> 
 async def test_connected_restored_on_izone_recovery(
     service: MockDiscoveryService,
 ) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     healthy_settings = deepcopy(controller.resources["SystemSettings"])
 
     controller.resources["SystemSettings"] = _fault_system_settings("000000001")
@@ -482,7 +482,7 @@ async def test_init_fault_property_reads_no_crash() -> None:
 async def test_fault_placeholder_values_in_cache_use_defaults(
     service: MockDiscoveryService,
 ) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings["SysFan"] = "error"
     controller._system_settings["RAS"] = "error"
     controller._system_settings["SysMode"] = "error"
@@ -509,7 +509,7 @@ async def test_unknown_sys_enum_raises(
     prop: str,
 ) -> None:
     """Unknown non-fault SysFan/SysMode must not silently map to AUTO/COOL."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings[field] = value
 
     with pytest.raises(ValueError):
@@ -529,7 +529,7 @@ async def test_unknown_fan_auto_falls_back_to_unknown_list() -> None:
     settings = deepcopy(controller.resources["SystemSettings"])
     settings["FanAuto"] = "brand-new-speed-table"
     controller.resources["SystemSettings"] = settings
-    service._controllers["000000099"] = controller
+    service._claim(controller)
 
     await controller._initialize(system_settings=settings)
 
@@ -539,7 +539,7 @@ async def test_unknown_fan_auto_falls_back_to_unknown_list() -> None:
 
 @pytest.mark.asyncio
 async def test_both_false_on_transport_failure(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._connected = False
 
     with pytest.raises(ConnectionError):
@@ -560,7 +560,7 @@ async def test_create_controller_starts_no_long_running_tasks() -> None:
         is_ipower=False,
     )
     settings = deepcopy(controller.resources["SystemSettings"])
-    service._controllers["000000001"] = controller
+    service._claim(controller)
 
     await controller._initialize(system_settings=settings)
 
@@ -580,7 +580,7 @@ async def test_start_discovery_starts_no_background_tasks() -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_all_public_updates_cache(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller.resources["SystemSettings"]["SysMode"] = "cool"
 
     await controller.refresh_all()
@@ -599,7 +599,7 @@ async def test_refresh_transport_failure_nudges_scan() -> None:
         is_ipower=False,
     )
     settings = deepcopy(controller.resources["SystemSettings"])
-    service._controllers["000000001"] = controller
+    service._claim(controller)
     await controller._initialize(system_settings=settings)
 
     controller._connected = False
@@ -626,7 +626,7 @@ async def test_refresh_failure_scan_respects_cooldown() -> None:
         is_ipower=False,
     )
     settings = deepcopy(controller.resources["SystemSettings"])
-    service._controllers["000000001"] = controller
+    service._claim(controller)
     await controller._initialize(system_settings=settings)
 
     controller._connected = False
@@ -655,7 +655,7 @@ async def test_set_system_command_confirms_with_refresh_system() -> None:
         is_ipower=False,
     )
     settings = deepcopy(controller.resources["SystemSettings"])
-    service._controllers["000000001"] = controller
+    service._claim(controller)
     await controller._initialize(system_settings=settings)
 
     fetch = AsyncMock(wraps=controller._fetch_system)
@@ -679,7 +679,7 @@ async def test_zone_command_confirms_with_zone_group_refresh() -> None:
         is_ipower=False,
     )
     settings = deepcopy(controller.resources["SystemSettings"])
-    service._controllers["000000001"] = controller
+    service._claim(controller)
     await controller._initialize(system_settings=settings)
 
     fetch = AsyncMock(wraps=controller._fetch_zone_group)
@@ -709,7 +709,7 @@ async def test_v2_refresh_sequential_zones_keeps_battery() -> None:
     controller.v2_system = SAMPLE_SYSTEM_V2
     controller.v2_zones = SAMPLE_ZONES_V2
     settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
-    svc._controllers["000025841"] = controller
+    svc._claim(controller)
     await controller._initialize(system_settings=settings)
 
     assert controller.is_v2 is True
@@ -752,7 +752,7 @@ async def test_v2_system_commands_use_izone_command_v2() -> None:
     controller.v2_system = SAMPLE_SYSTEM_V2
     controller.v2_zones = SAMPLE_ZONES_V2
     settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
-    svc._controllers["000025841"] = controller
+    svc._claim(controller)
     await controller._initialize(system_settings=settings)
     controller.sent.clear()
 
@@ -786,7 +786,7 @@ async def test_v2_zone_commands_confirm_with_type2() -> None:
     controller.v2_system = SAMPLE_SYSTEM_V2
     controller.v2_zones = deepcopy(SAMPLE_ZONES_V2)
     settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
-    svc._controllers["000025841"] = controller
+    svc._claim(controller)
     await controller._initialize(system_settings=settings)
     controller.sent.clear()
 
@@ -832,7 +832,7 @@ async def _v2_free_air_controller() -> tuple[MockDiscoveryService, MockControlle
     settings = v2_mod.system_v2_to_settings(SAMPLE_SYSTEM_V2["SystemV2"], "000025841")
     # FreeAir must be available for the setter path.
     settings["FreeAir"] = "off"
-    svc._controllers["000025841"] = controller
+    svc._claim(controller)
     await controller._initialize(system_settings=settings)
     controller.sent.clear()
     return svc, controller
@@ -889,7 +889,7 @@ async def test_v2_other_commands_do_not_fall_back_on_command_error() -> None:
 
 @pytest.mark.asyncio
 async def test_v1_status_properties(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     assert controller.airflow_lock is False
     assert controller.airflow_min_lock is True
@@ -901,7 +901,7 @@ async def test_v1_status_properties(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_v2_status_properties(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings = v2_mod.system_v2_to_settings(
         SAMPLE_SYSTEM_V2["SystemV2"], "000000001"
     )
@@ -931,7 +931,7 @@ async def test_airflow_lock_decoding(
     airflow_lock: bool | None,
     airflow_min_lock: bool | None,
 ) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings.pop("AirflowLock")
     controller._system_settings.update(cached)
 
@@ -951,7 +951,7 @@ async def test_airflow_lock_decoding(
 async def test_system_locked_decoding(
     service: MockDiscoveryService, cached: dict[str, str], expected: bool | None
 ) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings.pop("UnitLocked")
     controller._system_settings.update(cached)
 

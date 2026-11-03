@@ -28,7 +28,7 @@ async def v2_controller() -> AsyncIterator[MockController]:
     controller._v2_use_content_type = False
     controller.v2_system = deepcopy(SAMPLE_SYSTEM_V2)
     controller.v2_zones = deepcopy(SAMPLE_ZONES_V2)
-    svc._controllers[controller.device_uid] = controller
+    svc._claim(controller)
     settings = v2_mod.system_v2_to_settings(
         SAMPLE_SYSTEM_V2["SystemV2"], controller.device_uid
     )
@@ -124,7 +124,7 @@ async def test_v1_auto_still_sends_cached_setpoint(is_v2: bool) -> None:
         is_v2=is_v2,
         is_ipower=False,
     )
-    svc._controllers[controller.device_uid] = controller
+    svc._claim(controller)
     try:
         await controller._initialize(
             system_settings=deepcopy(controller.resources["SystemSettings"])
@@ -145,7 +145,7 @@ async def test_v1_auto_still_sends_cached_setpoint(is_v2: bool) -> None:
 
 @pytest.mark.asyncio
 async def test_zone_property_reads(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
 
     assert zone.index == 1
@@ -160,7 +160,7 @@ async def test_zone_property_reads(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_airflow_min(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
 
     await zone.set_airflow_min(20)
@@ -174,7 +174,7 @@ async def test_set_airflow_min(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_airflow_max(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
 
     await zone.set_airflow_max(80)
@@ -188,7 +188,7 @@ async def test_set_airflow_max(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
 
     await zone.set_temp_setpoint(22.0)
@@ -203,7 +203,7 @@ async def test_set_temp_setpoint(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
 
     await zone.set_mode(Zone.Mode.OPEN)
@@ -219,7 +219,7 @@ async def test_set_mode_open_and_close(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None:
-    zone = cast(MockController, service._controllers["000000001"]).zones[1]
+    zone = cast(MockController, service._controller("000000001")).zones[1]
 
     with pytest.raises(AttributeError, match="not rounded to nearest 5"):
         await zone.set_airflow_min(41)
@@ -229,7 +229,7 @@ async def test_set_airflow_min_validation(service: MockDiscoveryService) -> None
 
 @pytest.mark.asyncio
 async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None:
-    zone = cast(MockController, service._controllers["000000001"]).zones[1]
+    zone = cast(MockController, service._controller("000000001")).zones[1]
 
     with pytest.raises(AttributeError, match="not rounded to nearest 5"):
         await zone.set_airflow_max(41)
@@ -239,7 +239,7 @@ async def test_set_airflow_max_validation(service: MockDiscoveryService) -> None
 
 @pytest.mark.asyncio
 async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
     opcl = controller.zones[2]
     opcl._zone_data["Type"] = "opcl"
@@ -254,7 +254,7 @@ async def test_set_temp_setpoint_validation(service: MockDiscoveryService) -> No
 
 @pytest.mark.asyncio
 async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[2]
     zone._zone_data["Type"] = "opcl"
 
@@ -264,7 +264,7 @@ async def test_set_mode_auto_on_opcl_zone(service: MockDiscoveryService) -> None
 
 @pytest.mark.asyncio
 async def test_update_zone_index_mismatch(service: MockDiscoveryService) -> None:
-    zone = cast(MockController, service._controllers["000000001"]).zones[1]
+    zone = cast(MockController, service._controller("000000001")).zones[1]
     bad_data = dict(zone._zone_data)
     bad_data["Index"] = 99
 
@@ -298,7 +298,7 @@ async def test_v2_zone_status_properties_absent(v2_controller: MockController) -
 
 @pytest.mark.asyncio
 async def test_v1_zone_status_properties(service: MockDiscoveryService) -> None:
-    zone = cast(MockController, service._controllers["000000001"]).zones[0]
+    zone = cast(MockController, service._controller("000000001")).zones[0]
 
     assert zone.damper_fault is False
     assert zone.damper_position is None

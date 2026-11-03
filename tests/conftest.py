@@ -166,8 +166,7 @@ async def add_mock_controller(
         read_api="v1",
     )
     controller = await MockController.create(svc, probe=probe)
-    svc._claim_endpoint(probe.endpoint)
-    svc._controllers[device_uid] = controller
+    svc._claim(controller)
     return controller
 
 

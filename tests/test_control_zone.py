@@ -14,7 +14,7 @@ async def test_zones_mode_uses_ctrlzone_despite_const_temp_zero(
     service: MockDiscoveryService,
 ) -> None:
     """CONST/OPCL Temp:0 must not steal control from AUTO zones."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     spill = controller.zones[7]
 
     assert spill.type is Zone.Type.CONST
@@ -47,7 +47,7 @@ async def test_control_zone_ownership(
     owner: int | str | None,
     setpoint: float | None,
 ) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings["RAS"] = ras_mode
     controller._system_settings["CtrlZone"] = zone_ctrl
     if clear_auto_temp:
@@ -80,7 +80,7 @@ async def test_missing_ctrlzone_has_no_zone_owner(
     service: MockDiscoveryService, ras_mode: str, owns: bool
 ) -> None:
     """A missing CtrlZone must not fall back to zone 0."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._system_settings["RAS"] = ras_mode
     del controller._system_settings["CtrlZone"]
 

@@ -12,7 +12,7 @@ from .conftest import MockController, MockDiscoveryService
 
 @pytest.mark.asyncio
 async def test_zone_dump_state(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     zone = controller.zones[1]
 
     dumped = zone.dump_state()
@@ -23,7 +23,7 @@ async def test_zone_dump_state(service: MockDiscoveryService) -> None:
 
 @pytest.mark.asyncio
 async def test_controller_dump_state(service: MockDiscoveryService) -> None:
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
 
     dumped = controller.dump_state()
 
@@ -42,18 +42,13 @@ async def test_controller_dump_state(service: MockDiscoveryService) -> None:
 @pytest.mark.asyncio
 async def test_discovery_dump_state(service: MockDiscoveryService) -> None:
     service._recent_udp.clear()
-    service._claimed_endpoints["000000001"] = ControllerEndpoint(
-        uid="000000001", host="192.0.2.1"
-    )
-    service._known_endpoints["000000002"] = ControllerEndpoint(
-        uid="000000002", host="192.0.2.2"
-    )
+    service._cache_endpoint(ControllerEndpoint(uid="000000002", host="192.0.2.2"))
 
     dumped = service.dump_state()
 
     assert dumped["closed"] is False or isinstance(dumped["closed"], bool)
     assert "udp_bound" in dumped
-    assert {"uid": "000000001", "host": "192.0.2.1"} in dumped["claimed"]
+    assert {"uid": "000000001", "host": "8.8.8.8"} in dumped["claimed"]
     assert {"uid": "000000002", "host": "192.0.2.2"} in dumped["known"]
     assert dumped["recent_udp"] == []
 

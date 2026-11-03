@@ -9,7 +9,7 @@ from aiohttp import ClientSession
 import pytest
 
 from pizone import Controller, ControllerCommandError, ControllerEndpoint, Zone
-from pizone.discovery import DiscoveryService
+from pizone.discovery import DiscoveryService, _State
 
 from .conftest import MockController, MockDiscoveryService
 from .http_fakes import FakeHttpResponse, FakeHttpSession
@@ -69,10 +69,10 @@ async def test_concurrent_close_idempotent() -> None:
 
 @pytest.mark.asyncio
 async def test_discovery(service: MockDiscoveryService) -> None:
-    assert len(service._controllers) == 1
-    assert "000000001" in service._controllers
+    assert len(service._endpoints_in(_State.CLAIMED)) == 1
+    assert service._controller("000000001") is not None
 
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
     assert controller.mode == Controller.Mode.HEAT
@@ -85,7 +85,7 @@ async def test_discovery(service: MockDiscoveryService) -> None:
 @pytest.mark.asyncio
 async def test_ip_addr_change(service: MockDiscoveryService) -> None:
     """Verify that IP address changes are handled."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     assert controller.device_uid == "000000001"
     assert controller.device_ip == "8.8.8.8"
 
@@ -102,7 +102,7 @@ async def test_refresh_zones_supports_zone_extender_group(
     service: MockDiscoveryService,
 ) -> None:
     """Verify that zones 13 and 14 are fetched from the extender endpoint."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller.resources["SystemSettings"]["NoOfZones"] = 14
     controller._system_settings["NoOfZones"] = 14
     controller.resources["Zones13_14"] = [
@@ -152,7 +152,7 @@ async def test_refresh_zones_supports_zone_extender_group(
 @pytest.mark.asyncio
 async def test_refresh_restores_connection(service: MockDiscoveryService) -> None:
     """Successful refresh clears a prior connection failure."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller._set_bridge_ok(False)
     assert not controller.connected
 
@@ -166,7 +166,7 @@ async def test_disconnected_reads_return_cached_state(
     service: MockDiscoveryService,
 ) -> None:
     """Sync property reads use cached data and do not raise when disconnected."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     assert controller.mode == Controller.Mode.HEAT
 
     controller._set_bridge_ok(False)
@@ -182,7 +182,7 @@ async def test_disconnected_reads_return_cached_state(
 @pytest.mark.asyncio
 async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
     """iZoneChanged_System is recognized and ignored (no refresh)."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller.resources["SystemSettings"]["SysMode"] = "cool"
     controller._system_settings["SysMode"] = "heat"
 
@@ -198,7 +198,7 @@ async def test_changed_system_datagram(service: MockDiscoveryService) -> None:
 @pytest.mark.asyncio
 async def test_changed_zones_datagram(service: MockDiscoveryService) -> None:
     """iZoneChanged_Zones is recognized and ignored (no refresh)."""
-    controller = cast(MockController, service._controllers["000000001"])
+    controller = cast(MockController, service._controller("000000001"))
     controller.resources["Zones1_4"][0]["Name"] = "UPDATED"
     controller.zones[0]._zone_data["Name"] = "LIVING"
 
@@ -219,7 +219,7 @@ async def test_x_ac_flag_discovery() -> None:
 
     svc._process_datagram(datagram, ("10.0.0.90", 12107))
 
-    assert svc._known_endpoints == {
+    assert svc._endpoints_in(_State.KNOWN) == {
         "000025841": ControllerEndpoint(uid="000025841", host="10.0.0.90")
     }
     await svc.close()
@@ -234,7 +234,7 @@ async def test_invalid_discovery_message(
 
     service._process_datagram(b"not-a-discovery-message", ("10.0.0.90", 12107))
 
-    assert len(service._controllers) == 0
+    assert service._endpoints == {}
     assert any("Invalid Message Received" in message for message in caplog.messages)
 
     await service.close()
