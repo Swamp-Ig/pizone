@@ -39,6 +39,14 @@ The iZone Ethernet interface is documented in
 If Home Assistant can load the iZone integration, prefer **Download diagnostics**
 from the integration page.
 
+A bridge is only reported as found once it answers over HTTP. When one replies
+to discovery but fails that check, the library says why: `discover_all()`
+lists it in the result's `unverified`, and `discover_by_host()` /
+`discover_by_uid()` raise `EndpointVerifyError` with a `VerifyFailure` reason
+(no HTTP reply, unreadable reply, a different UID, or a host name that didn't
+resolve). Failures during background discovery are logged at debug level on
+the `pizone.discovery` logger.
+
 When that is not possible (or you need a live HTTP/UDP survey of the bridge),
 run the stdlib probe from a machine on the same LAN:
 
