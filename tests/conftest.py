@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from pizone import Controller, ControllerEndpoint, power as power_mod
-from pizone.discovery import DiscoveryService
+from pizone.discovery import DiscoveryService, _Entry, _State
 from pizone.types import ControllerProbe
 
 from .power_data import POWER_CONFIG, POWER_STATUS
@@ -153,6 +153,10 @@ class MockDiscoveryService(DiscoveryService):
 
     def _send_broadcasts(self) -> None:
         """Avoid network traffic during tests."""
+
+    def seed_known(self, endpoint: ControllerEndpoint) -> None:
+        """Record *endpoint* as known without probing or notifying."""
+        self._endpoints[endpoint.uid] = _Entry(_State.KNOWN, endpoint)
 
 
 async def add_mock_controller(

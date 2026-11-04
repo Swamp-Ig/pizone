@@ -16,9 +16,10 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum, auto
-from ipaddress import IPv4Interface
+from ipaddress import IPv4Address, IPv4Interface
 import json
 import logging
+import socket
 import time
 from types import TracebackType
 from typing import Any, Self, cast
@@ -280,10 +281,10 @@ class DiscoveryService:
         return None
 
     def _verifying_host(self, host: str) -> ControllerEndpoint | None:
-        """Return an unclaimed endpoint at *host* whose HTTP verify is in flight."""
+        """Return an endpoint at *host* whose HTTP verify is in flight."""
         for entry in self._endpoints.values():
             if (
-                entry.state in (_State.SEEN, _State.KNOWN)
+                entry.state is not _State.CLAIMING
                 and entry.candidate is not None
                 and entry.candidate.host == host
             ):
@@ -316,10 +317,30 @@ class DiscoveryService:
             controller,
         )
 
-    def _cache_endpoint(self, endpoint: ControllerEndpoint) -> None:
-        """Remember an HTTP-verified unclaimed endpoint for later discovery calls."""
-        self._ensure_uid_available(endpoint.uid)
+    def _apply_verified(self, endpoint: ControllerEndpoint) -> None:
+        """Record that *endpoint*'s UID answered over HTTP at its IP.
+
+        Repoints a running controller (firing its address-changed callback),
+        updates or adds an unclaimed endpoint and notifies, and leaves an
+        in-flight create alone.
+        """
+        entry = self._endpoints.get(endpoint.uid)
+        if entry is not None and entry.state is _State.CLAIMING:
+            return
+        if entry is not None and entry.state is _State.CLAIMED:
+            if entry.endpoint != endpoint:
+                entry.endpoint = endpoint
+                if entry.controller is not None:
+                    entry.controller._refresh_address(endpoint.host)  # noqa: SLF001
+            return
+        if (
+            entry is not None
+            and entry.state is _State.KNOWN
+            and entry.endpoint == endpoint
+        ):
+            return
         self._endpoints[endpoint.uid] = _Entry(_State.KNOWN, endpoint)
+        self._emit_endpoint_discovered(endpoint)
 
     def _verify_endpoint(
         self, endpoint: ControllerEndpoint
@@ -364,13 +385,7 @@ class DiscoveryService:
             if entry.state is _State.SEEN:
                 del self._endpoints[uid]
             return None
-        if entry.state is _State.CLAIMED:
-            entry.endpoint = probed.endpoint
-            if entry.controller is not None:
-                entry.controller._refresh_address(probed.endpoint.host)  # noqa: SLF001
-            return probed.endpoint
-        self._endpoints[uid] = _Entry(_State.KNOWN, probed.endpoint)
-        self._emit_endpoint_discovered(probed.endpoint)
+        self._apply_verified(probed.endpoint)
         return probed.endpoint
 
     def _emit_endpoint_discovered(self, endpoint: ControllerEndpoint) -> None:
@@ -382,34 +397,37 @@ class DiscoveryService:
             self._discover_all_notified.add(endpoint.uid)
 
     async def discover_by_host(self, host: str) -> ControllerEndpoint | None:
-        """Return a known endpoint for *host*, or HTTP-probe if unseen.
+        """Return the controller endpoint at *host*, an IPv4 address or a name.
 
-        User-initiated lookup; HTTP verify on probe. Cache hits may be older UDP data.
+        A name is resolved to IPv4 addresses first; the returned endpoint always
+        holds the IP. An address already in the registry is returned without a
+        probe. Otherwise the first address that answers over HTTP is recorded
+        like any verified endpoint: a running controller with that UID is
+        repointed (firing its address-changed callback), and a new or moved
+        unclaimed endpoint is notified.
 
         Raises:
             UnpairedBridgeError: If the probed UID is the unpaired placeholder;
-                the endpoint is not cached.
-            ControllerAlreadyClaimedError: If a controller at *host*, or with the
-                probed UID, is created or being created.
+                the endpoint is not recorded.
 
         """
-        claimed = self._entry_by_host(host, _State.CLAIMING, _State.CLAIMED)
-        if claimed is not None:
-            raise ControllerAlreadyClaimedError(
-                f"Controller {claimed.endpoint.uid} already created"
+        addresses = await self._resolve(host)
+        for address in addresses:
+            owned = self._entry_by_host(
+                address, _State.CLAIMING, _State.CLAIMED, _State.KNOWN
             )
-        known = self._entry_by_host(host, _State.KNOWN)
-        if known is not None:
-            return known.endpoint
-        pending = self._verifying_host(host)
-        if pending is not None and (verified := await self._await_verify(pending)):
-            return verified
+            if owned is not None:
+                return owned.endpoint
+        for address in addresses:
+            pending = self._verifying_host(address)
+            if pending is not None and (verified := await self._await_verify(pending)):
+                return verified
 
-        probed = await self._probe(host)
+        probed = await self._probe_first(addresses)
         if probed is None:
             return None
         raise_if_placeholder_uid(probed.endpoint.uid)
-        self._cache_endpoint(probed.endpoint)
+        self._apply_verified(probed.endpoint)
         return probed.endpoint
 
     async def discover_by_uid(self, uid: str) -> ControllerEndpoint | None:
@@ -420,7 +438,7 @@ class DiscoveryService:
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
             ControllerAlreadyClaimedError: If a controller with *uid* is created
-                or being created, including one started during the scan.
+                or being created when the call starts.
 
         """
         raise_if_placeholder_uid(uid)
@@ -433,7 +451,7 @@ class DiscoveryService:
             return verified
         endpoint = await self._scan_for_uid(uid)
         if endpoint is not None:
-            self._cache_endpoint(endpoint)
+            self._apply_verified(endpoint)
         return endpoint
 
     async def _scan_for_uid(self, uid: str) -> ControllerEndpoint | None:
@@ -524,8 +542,10 @@ class DiscoveryService:
         """Create and initialize a controller at the given address.
 
         Preferred entry point after :func:`create_discovery`. One-shot per
-        UID. HTTP probe is the trust boundary; callers must handle the device
-        being unreachable even after a recent discovery notify.
+        UID. *host* may be an IPv4 address or a name; a name is resolved and
+        the controller runs on the IP that answers. HTTP probe is the trust
+        boundary; callers must handle the device being unreachable even after a
+        recent discovery notify.
 
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
@@ -597,7 +617,7 @@ class DiscoveryService:
         *,
         on_address_changed: Callable[[ControllerEndpoint], None] | None,
     ) -> Controller:
-        probed = await self._probe(host, expected_uid=uid)
+        probed = await self._probe_first(await self._resolve(host), expected_uid=uid)
         if probed is None:
             raise ConnectionError(f"Unable to connect to controller {uid} at {host}")
 
@@ -618,6 +638,48 @@ class DiscoveryService:
             _State.KNOWN,
             ControllerEndpoint(uid=controller.device_uid, host=controller.device_ip),
         )
+
+    async def _resolve(self, host: str) -> list[str]:
+        """Return the IPv4 addresses for *host*; empty if it cannot be resolved."""
+        with suppress(ValueError):
+            return [str(IPv4Address(host))]
+        try:
+            async with asyncio.timeout(Controller.REQUEST_TIMEOUT):
+                infos = await asyncio.get_running_loop().getaddrinfo(
+                    host, None, family=socket.AF_INET, type=socket.SOCK_STREAM
+                )
+        except OSError, TimeoutError:
+            _LOG.debug("Unable to resolve %s", host, exc_info=True)
+            return []
+        return list(dict.fromkeys(str(info[4][0]) for info in infos))
+
+    async def _probe_first(
+        self, addresses: list[str], *, expected_uid: str | None = None
+    ) -> ControllerProbe | None:
+        """Probe *addresses* concurrently; return the first controller that answers.
+
+        Concurrent so a dead address (e.g. a stale DNS record) doesn't cost a
+        full timeout before the next is tried. Two addresses can be the same
+        bridge, which then sees overlapping requests it handles poorly; accepted
+        because a name resolving to several addresses is rare.
+        """
+        if not addresses:
+            return None
+        if len(addresses) == 1:
+            return await self._probe(addresses[0], expected_uid=expected_uid)
+        tasks = [
+            asyncio.ensure_future(self._probe(address, expected_uid=expected_uid))
+            for address in addresses
+        ]
+        try:
+            for next_done in asyncio.as_completed(tasks):
+                if (probed := await next_done) is not None:
+                    return probed
+            return None
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _probe(
         self, host: str, *, expected_uid: str | None = None

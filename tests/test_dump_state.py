@@ -43,7 +43,7 @@ async def test_controller_dump_state(service: MockDiscoveryService) -> None:
 @pytest.mark.asyncio
 async def test_discovery_dump_state(service: MockDiscoveryService) -> None:
     service._recent_udp.clear()
-    service._cache_endpoint(ControllerEndpoint(uid="000000002", host="192.0.2.2"))
+    service.seed_known(ControllerEndpoint(uid="000000002", host="192.0.2.2"))
 
     dumped = service.dump_state()
 
