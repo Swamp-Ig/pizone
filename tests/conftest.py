@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from pizone import Controller, ControllerEndpoint, power as power_mod
+from pizone import Controller, ControllerEndpoint, create_discovery, power as power_mod
 from pizone.discovery import DiscoveryService, _Entry, _State
 from pizone.types import ControllerProbe
 
@@ -208,3 +208,40 @@ async def ipower_service(
     yield svc
 
     await svc.close()
+
+
+# Found once per hardware run: each discovery costs a scan wait, and a UDP
+# reply can drop.
+_FOUND_BRIDGES: list[ControllerEndpoint] = []
+
+
+@pytest.fixture
+async def bridge() -> ControllerEndpoint:
+    """Find the first bridge on the LAN, leaving no discovery service running."""
+    for _ in range(2):
+        if _FOUND_BRIDGES:
+            break
+        service = await create_discovery()
+        try:
+            _FOUND_BRIDGES.extend(await service.discover_all())
+        finally:
+            await service.close()
+    assert _FOUND_BRIDGES, "No iZone controller found on the network"
+    return _FOUND_BRIDGES[0]
+
+
+@pytest.fixture
+async def live_service(bridge: ControllerEndpoint) -> AsyncIterator[DiscoveryService]:
+    """Fresh discovery service with an empty registry, started after *bridge*."""
+    del bridge
+    service = await create_discovery()
+    yield service
+    await service.close()
+
+
+@pytest.fixture
+async def live_controller(
+    live_service: DiscoveryService, bridge: ControllerEndpoint
+) -> Controller:
+    """Controller for the bridge found on the LAN."""
+    return await live_service.create_controller(bridge.uid, bridge.host)
