@@ -429,7 +429,7 @@ class DiscoveryService:
         if self._discover_all_notified is not None:
             self._discover_all_notified.add(endpoint.uid)
 
-    async def discover_by_host(self, host: str) -> ControllerEndpoint | None:
+    async def discover_by_host(self, host: str) -> ControllerEndpoint:
         """Return the controller endpoint at *host*, an IPv4 address or a name.
 
         A name is resolved to IPv4 addresses first; the returned endpoint always
