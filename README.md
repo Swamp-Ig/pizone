@@ -72,5 +72,8 @@ Individual commands:
 To run integration tests against a controller on your network:
 
 ```bash
-uv run pytest tests/test_fullstack.py -m hardware -o addopts=
+uv run pytest -m hardware -o addopts=
 ```
+
+They bind UDP port 7005, so stop Home Assistant or anything else using iZone
+discovery on the same machine first.
