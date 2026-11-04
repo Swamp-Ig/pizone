@@ -33,6 +33,7 @@ async def test_controller_dump_state(service: MockDiscoveryService) -> None:
     assert dumped["bridge_connected"] is True
     assert "system_settings" in dumped
     assert dumped["system_settings"]["AirStreamDeviceUId"] == "000000001"
+    assert dumped["last_fault"] is None
     assert isinstance(dumped["fan_modes"], list)
     assert len(dumped["zones"]) == len(controller.zones)
     assert dumped["zones"][1]["Index"] == 1

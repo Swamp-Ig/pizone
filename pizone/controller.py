@@ -5,6 +5,7 @@ from asyncio import Event, Lock, Task
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from functools import wraps
 import json
@@ -112,6 +113,10 @@ class Controller:
     # Live samples: tests.resources.FAULT_SYSTEM_SETTINGS_BRIDGE_NO_AC (unpaired)
     # and FAULT_SYSTEM_SETTINGS_PAIRED_COLD_RESTART (paired UID, cold restart).
     _FAULT_STATE_VALUES = frozenset({"error"})
+    # A fault in any of these makes the unit unmanageable, so take it offline.
+    # Other faulted fields (e.g. SysFan for a mode the bridge can't name) are
+    # reported but the payload is still used.
+    _OFFLINE_FAULT_FIELDS = frozenset({"SysMode", "RAS", "NoOfZones"})
     # Safe property fallbacks when cache is empty or a field is in _FAULT_STATE_VALUES
     _SYSTEM_STATE_DEFAULTS: ControllerData = {
         "SysOn": "off",
@@ -168,6 +173,8 @@ class Controller:
         self._closed: bool = False
         self._bridge_ok: bool = True
         self._izone_ok: bool = True
+        self._fault_fields: tuple[str, ...] = ()
+        self._last_fault: dict[str, Any] | None = None
         self._on_address_changed: Callable[[ControllerEndpoint], None] | None = None
 
         self._sending_lock = Lock()
@@ -338,6 +345,7 @@ class Controller:
             "is_ipower": self.is_ipower,
             "fan_modes": [fan.value for fan in self.fan_modes],
             "system_settings": dict(self._system_settings),
+            "last_fault": self._last_fault,
             "zones": [zone.dump_state() for zone in self.zones],
             "power": self._power.dump_state() if self._power is not None else None,
         }
@@ -877,17 +885,40 @@ class Controller:
             _LOG.error("_refresh_system called with non-matching device ID")
             return None
 
-        if not self._system_settings_valid(values):
-            _LOG.warning(
-                "iZone subsystem fault uid=%s; retaining cache",
-                self._device_uid,
-            )
+        faults = self._system_settings_faults(values)
+        offline = not self._OFFLINE_FAULT_FIELDS.isdisjoint(faults)
+        self._record_faults(values, faults, offline=offline)
+        if offline:
             self._set_izone_ok(False)
             return values
 
         self._system_settings = values
         self._set_izone_ok(True)
         return values
+
+    def _record_faults(
+        self, values: ControllerData, faults: list[str], *, offline: bool
+    ) -> None:
+        """Log fault changes once and keep the last faulted payload."""
+        previous = self._fault_fields
+        self._fault_fields = tuple(faults)
+        if not faults:
+            if previous:
+                _LOG.info("iZone system fault cleared uid=%s", self._device_uid)
+            return
+        self._last_fault = {
+            "at": datetime.now(UTC).isoformat(),
+            "fields": faults,
+            "offline": offline,
+            "system_settings": dict(values),
+        }
+        _LOG.log(
+            logging.DEBUG if self._fault_fields == previous else logging.WARNING,
+            "iZone system fault uid=%s: %s faulted; controller %s",
+            self._device_uid,
+            ", ".join(faults),
+            "offline" if offline else "still connected",
+        )
 
     def _refresh_address(self, address: str) -> None:
         """Update the device IP and notify the consumer of the move."""
@@ -901,14 +932,20 @@ class Controller:
                     self._on_address_changed, endpoint
                 )
 
-    @staticmethod
-    def _system_settings_valid(values: ControllerData) -> bool:
-        """Return whether *values* look healthy; unit-only systems have zero zones."""
-        return (
-            int(values["NoOfZones"]) >= 0
-            and str(values["SysFan"]) != "error"
-            and str(values["RAS"]) != "error"
-        )
+    @classmethod
+    def _system_settings_faults(cls, values: ControllerData) -> list[str]:
+        """Return the fields of *values* that report a fault.
+
+        Unit-only systems have zero zones, so only a negative count is a fault.
+        """
+        faults = [
+            key
+            for key, value in values.items()
+            if str(value) in cls._FAULT_STATE_VALUES
+        ]
+        if "NoOfZones" not in faults and int(values["NoOfZones"]) < 0:
+            faults.append("NoOfZones")
+        return faults
 
     def _int_system_state(self, state: str) -> int | None:
         value = self._system_settings.get(state)

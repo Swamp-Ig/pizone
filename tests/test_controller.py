@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+import logging
 from typing import cast
 from unittest.mock import AsyncMock
 
@@ -444,6 +445,97 @@ async def test_live_fault_fixtures_mark_izone_not_ok(
     await controller.refresh_system()
     assert controller.bridge_connected is True
     assert controller.connected is False
+    last_fault = controller.dump_state()["last_fault"]
+    assert last_fault["fields"] == ["SysMode", "SysFan", "RAS"]
+    assert last_fault["offline"] is True
+    assert last_fault["system_settings"] == settings
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("SysMode", "error", id="sys_mode"),
+        pytest.param("RAS", "error", id="ras"),
+        pytest.param("NoOfZones", -1, id="negative_zone_count"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_offline_field_fault_keeps_cache(
+    service: MockDiscoveryService, field: str, value: object
+) -> None:
+    controller = cast(MockController, service._controller("000000001"))
+    healthy_settings = deepcopy(controller.resources["SystemSettings"])
+    settings = {**healthy_settings, field: value}
+    controller.resources["SystemSettings"] = settings
+
+    await controller.refresh_system()
+
+    assert controller.connected is False
+    assert controller._system_settings == healthy_settings
+    last_fault = controller.dump_state()["last_fault"]
+    assert last_fault["fields"] == [field]
+    assert last_fault["offline"] is True
+    assert last_fault["system_settings"] == settings
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        pytest.param("SysFan", id="sys_fan"),
+        pytest.param("UnitType", id="other_field"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_other_field_fault_stays_connected(
+    service: MockDiscoveryService, field: str
+) -> None:
+    controller = cast(MockController, service._controller("000000001"))
+    settings = {**controller.resources["SystemSettings"], field: "error"}
+    controller.resources["SystemSettings"] = settings
+
+    await controller.refresh_system()
+
+    assert controller.connected is True
+    assert controller._system_settings == settings
+    last_fault = controller.dump_state()["last_fault"]
+    assert last_fault["fields"] == [field]
+    assert last_fault["offline"] is False
+
+
+@pytest.mark.asyncio
+async def test_sys_fan_fault_reads_as_auto(service: MockDiscoveryService) -> None:
+    controller = cast(MockController, service._controller("000000001"))
+    controller.resources["SystemSettings"] = {
+        **controller.resources["SystemSettings"],
+        "SysFan": "error",
+    }
+
+    await controller.refresh_system()
+
+    assert controller.fan == Controller.Fan.AUTO
+
+
+@pytest.mark.asyncio
+async def test_fault_logged_once_and_kept_after_recovery(
+    service: MockDiscoveryService, caplog: pytest.LogCaptureFixture
+) -> None:
+    controller = cast(MockController, service._controller("000000001"))
+    healthy_settings = deepcopy(controller.resources["SystemSettings"])
+    caplog.set_level(logging.DEBUG, logger="pizone.controller")
+
+    controller.resources["SystemSettings"] = _fault_system_settings("000000001")
+    await controller.refresh_system()
+    await controller.refresh_system()
+    controller.resources["SystemSettings"] = healthy_settings
+    await controller.refresh_system()
+
+    faulted = [r for r in caplog.records if "system fault uid" in r.getMessage()]
+    assert [r.levelno for r in faulted] == [logging.WARNING, logging.DEBUG]
+    assert "SysFan, RAS faulted; controller offline" in faulted[0].getMessage()
+    cleared = [r for r in caplog.records if "system fault cleared" in r.getMessage()]
+    assert [r.levelno for r in cleared] == [logging.INFO]
+    assert controller.connected is True
+    assert controller.dump_state()["last_fault"]["fields"] == ["SysFan", "RAS"]
 
 
 @pytest.mark.asyncio
