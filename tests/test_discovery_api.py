@@ -1,6 +1,7 @@
 """Tests for the pizone 1.4 discovery API."""
 
 import asyncio
+from datetime import UTC, datetime
 import errno
 import socket
 import sys
@@ -15,11 +16,14 @@ from pizone import (
     ControllerAlreadyClaimedError,
     ControllerCommandError,
     ControllerEndpoint,
+    EndpointVerifyError,
     UnpairedBridgeError,
+    UnverifiedEndpoint,
+    VerifyFailure,
     create_discovery,
 )
 from pizone.const import PLACEHOLDER_DEVICE_UID
-from pizone.discovery import DiscoveryService, _Entry, _State
+from pizone.discovery import DiscoveryService, _Entry, _ProbeFailed, _State
 from pizone.types import ControllerProbe
 
 from .conftest import MockController, MockDiscoveryService
@@ -357,30 +361,43 @@ async def test_discover_by_host_dead_address_does_not_delay_live_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discover_by_host_unresolvable_name_returns_none() -> None:
+async def test_discover_by_host_unresolvable_name_raises() -> None:
     service = MockDiscoveryService()
     service._session = cast(
         ClientSession, FakeHttpSession(get_error=OSError("should not probe"))
     )
 
     loop = asyncio.get_running_loop()
-    with patch.object(
-        loop, "getaddrinfo", AsyncMock(side_effect=socket.gaierror("no such host"))
+    with (
+        patch.object(
+            loop, "getaddrinfo", AsyncMock(side_effect=socket.gaierror("no such host"))
+        ),
+        pytest.raises(EndpointVerifyError) as exc_info,
     ):
-        assert await service.discover_by_host("izone.lan") is None
+        await service.discover_by_host("izone.lan")
+    assert (exc_info.value.host, exc_info.value.failure) == (
+        "izone.lan",
+        VerifyFailure.UNRESOLVED,
+    )
     assert service._endpoints == {}
     await service.close()
 
 
 @pytest.mark.asyncio
-async def test_discover_by_host_unreachable() -> None:
+async def test_discover_by_host_unreachable_raises() -> None:
     service = MockDiscoveryService()
     service._session = cast(
         ClientSession,
         FakeHttpSession(get_error=OSError("unreachable")),
     )
-    endpoint = await service.discover_by_host("10.0.0.90")
-    assert endpoint is None
+    # A ConnectionError, so existing transport-error handling still applies.
+    with pytest.raises(ConnectionError) as exc_info:
+        await service.discover_by_host("10.0.0.90")
+    assert isinstance(exc_info.value, EndpointVerifyError)
+    assert (exc_info.value.host, exc_info.value.failure) == (
+        "10.0.0.90",
+        VerifyFailure.NO_REPLY,
+    )
     await service.close()
 
 
@@ -418,14 +435,15 @@ async def test_discover_by_host_unreachable() -> None:
         ),
     ],
 )
-async def test_discover_by_host_malformed_body_returns_none(
+async def test_discover_by_host_malformed_body_raises_unreadable(
     response: FakeHttpResponse,
 ) -> None:
-    """Manual host widens _probe input; content failures must not raise."""
+    """Content failures are reported as unreadable, not as other errors."""
     service = MockDiscoveryService()
     service._session = cast(ClientSession, FakeHttpSession(get_response=response))
-    endpoint = await service.discover_by_host("10.0.0.90")
-    assert endpoint is None
+    with pytest.raises(EndpointVerifyError) as exc_info:
+        await service.discover_by_host("10.0.0.90")
+    assert exc_info.value.failure is VerifyFailure.UNREADABLE
     await service.close()
 
 
@@ -543,6 +561,142 @@ async def test_discover_by_uid() -> None:
         endpoint = await service.discover_by_uid("000025841")
 
     assert endpoint == ControllerEndpoint(uid="000025841", host="10.0.0.90")
+    await service.close()
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        pytest.param(
+            EndpointVerifyError("izone.lan", VerifyFailure.UNRESOLVED),
+            "iZone controller at izone.lan: host name did not resolve",
+            id="unresolved",
+        ),
+        pytest.param(
+            EndpointVerifyError(
+                "10.0.0.5",
+                VerifyFailure.OTHER_UID,
+                uid="000025841",
+                answered_uid="000099999",
+            ),
+            "iZone controller 000025841 at 10.0.0.5: answered as UID 000099999",
+            id="other-uid",
+        ),
+    ],
+)
+def test_endpoint_verify_error_str(error: EndpointVerifyError, message: str) -> None:
+    assert str(error) == message
+    assert error.errno is None
+
+
+def test_unverified_endpoint_str() -> None:
+    unverified = UnverifiedEndpoint(
+        endpoint=ControllerEndpoint(uid="000025841", host="10.0.0.5"),
+        failure=VerifyFailure.NO_REPLY,
+        answered_uid=None,
+        at=datetime.now(UTC),
+    )
+    assert str(unverified) == "iZone controller 000025841 at 10.0.0.5: no HTTP reply"
+
+
+@pytest.mark.asyncio
+async def test_discover_by_uid_no_reply_returns_none() -> None:
+    service = MockDiscoveryService()
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", AsyncMock()),
+    ):
+        assert await service.discover_by_uid("000025841") is None
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_by_uid_failed_check_raises() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000099999")),
+    )
+
+    async def scan_and_reply() -> None:
+        service._process_datagram(
+            _asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107)
+        )
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", side_effect=scan_and_reply),
+        pytest.raises(EndpointVerifyError) as exc_info,
+    ):
+        await service.discover_by_uid("000025841")
+
+    error = exc_info.value
+    assert (error.host, error.uid, error.failure, error.answered_uid) == (
+        "10.0.0.90",
+        "000025841",
+        VerifyFailure.OTHER_UID,
+        "000099999",
+    )
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_all_reports_only_this_calls_failures() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession,
+        FakeHttpSession(get_response=_system_settings_response("000025841")),
+    )
+    # An earlier passive failure that this call must not report.
+    service._process_datagram(_asport("000077777", "10.0.0.92"), ("10.0.0.92", 12107))
+    await _settle_verifies(service)
+
+    async def scan_and_reply() -> None:
+        service._process_datagram(
+            _asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107)
+        )
+        service._process_datagram(
+            _asport("000088888", "10.0.0.91"), ("10.0.0.91", 12107)
+        )
+
+    with (
+        patch("pizone.discovery.asyncio.sleep", AsyncMock()),
+        patch.object(service, "scan", side_effect=scan_and_reply),
+    ):
+        result = await service.discover_all()
+
+    assert result == [ControllerEndpoint(uid="000025841", host="10.0.0.90")]
+    assert [
+        (failed.endpoint, failed.failure, failed.answered_uid)
+        for failed in result.unverified
+    ] == [
+        (
+            ControllerEndpoint(uid="000088888", host="10.0.0.91"),
+            VerifyFailure.OTHER_UID,
+            "000025841",
+        )
+    ]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_create_controller_unreachable_raises_with_reason() -> None:
+    service = MockDiscoveryService()
+    service._session = cast(
+        ClientSession, FakeHttpSession(get_error=OSError("unreachable"))
+    )
+
+    with (
+        patch.object(service, "_scan_for_uid", AsyncMock(return_value=None)),
+        pytest.raises(EndpointVerifyError) as exc_info,
+    ):
+        await service.create_controller("000025841", "10.0.0.90")
+
+    assert (exc_info.value.host, exc_info.value.failure) == (
+        "10.0.0.90",
+        VerifyFailure.NO_REPLY,
+    )
     await service.close()
 
 
@@ -712,25 +866,34 @@ async def test_passive_asport_notifies_on_host_change() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "session",
+    ("session", "failure", "answered_uid"),
     [
         pytest.param(
-            FakeHttpSession(get_error=OSError("unreachable")), id="unreachable"
+            FakeHttpSession(get_error=OSError("unreachable")),
+            VerifyFailure.NO_REPLY,
+            None,
+            id="unreachable",
         ),
         pytest.param(
             FakeHttpSession(get_response=_system_settings_response("000099999")),
+            VerifyFailure.OTHER_UID,
+            "000099999",
             id="uid-mismatch",
         ),
         pytest.param(
             FakeHttpSession(
                 get_response=_system_settings_response(PLACEHOLDER_DEVICE_UID)
             ),
+            VerifyFailure.OTHER_UID,
+            PLACEHOLDER_DEVICE_UID,
             id="placeholder-reply",
         ),
         pytest.param(
             FakeHttpSession(
                 get_response=FakeHttpResponse(200, json_data={"SysOn": "on"})
             ),
+            VerifyFailure.UNREADABLE,
+            None,
             id="malformed",
         ),
         pytest.param(
@@ -738,21 +901,32 @@ async def test_passive_asport_notifies_on_host_change() -> None:
                 system=MALFORMED_SYSTEM_V2,
                 get_response=FakeHttpResponse(200, body=""),
             ),
+            VerifyFailure.UNREADABLE,
+            None,
             id="malformed-v2",
         ),
     ],
 )
 async def test_passive_asport_failed_verify_drops_endpoint(
-    session: FakeHttpSession,
+    session: FakeHttpSession, failure: VerifyFailure, answered_uid: str | None
 ) -> None:
     service = MockDiscoveryService()
     service._session = cast(ClientSession, session)
     discovered: list[ControllerEndpoint] = []
     service._on_endpoint_discovered = discovered.append
+    seen = ControllerEndpoint(uid="000025841", host="10.0.0.90")
 
-    service._process_datagram(_asport("000025841", "10.0.0.90"), ("10.0.0.90", 12107))
-    await _settle_verifies(service)
+    service._process_datagram(_asport(seen.uid, seen.host), (seen.host, 12107))
+    verify = service._endpoints[seen.uid].verify
+    assert verify is not None
+    result = await verify
 
+    assert isinstance(result, UnverifiedEndpoint)
+    assert (result.endpoint, result.failure, result.answered_uid) == (
+        seen,
+        failure,
+        answered_uid,
+    )
     assert discovered == []
     assert service._endpoints_in(_State.SEEN) == {}
     assert service._endpoints_in(_State.KNOWN) == {}
@@ -1198,7 +1372,7 @@ async def test_create_controller_rejects_overlapping_claim() -> None:
     gate = asyncio.Event()
     real_probe = service._probe
 
-    async def gated_probe(host: str, **kwargs: str) -> ControllerProbe | None:
+    async def gated_probe(host: str, **kwargs: str) -> object:
         await gate.wait()
         return await real_probe(host, **kwargs)
 
@@ -1392,7 +1566,7 @@ async def test_create_controller_address_changed_after_return() -> None:
             "_probe",
             AsyncMock(
                 side_effect=[
-                    None,
+                    _ProbeFailed(VerifyFailure.NO_REPLY),
                     _probe_result("000025841", "10.0.0.90"),
                 ]
             ),
@@ -1641,7 +1815,11 @@ async def test_create_controller_empty_v1_and_v2_error_raises() -> None:
     service._session = cast(ClientSession, session)
     with (
         patch.object(service, "_scan_for_uid", AsyncMock(return_value=None)),
-        pytest.raises(ConnectionError, match="Unable to connect"),
+        pytest.raises(EndpointVerifyError) as exc_info,
     ):
         await service.create_controller("000025841", "10.0.0.90")
+    assert (exc_info.value.uid, exc_info.value.failure) == (
+        "000025841",
+        VerifyFailure.UNREADABLE,
+    )
     await service.close()

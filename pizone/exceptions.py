@@ -1,6 +1,7 @@
 """pizone-specific exceptions."""
 
 from .const import PLACEHOLDER_DEVICE_UID
+from .types import VerifyFailure, _failure_text
 
 
 class ControllerCommandError(Exception):
@@ -19,6 +20,43 @@ class InvalidValueError(ValueError, AttributeError):
     by the current system or zone configuration. Also an :exc:`AttributeError`,
     so callers written against earlier versions keep working.
     """
+
+
+class EndpointVerifyError(ConnectionError):
+    """A lookup found nothing usable at the address it checked.
+
+    The message is plain English for logs. Callers that show the reason to
+    users should use the attributes with their own (translated) text.
+
+    Attributes:
+        host: The address or host name that was checked.
+        failure: Why the check failed.
+        uid: The UID the caller expected, if any.
+        answered_uid: The UID that answered instead, for ``OTHER_UID``.
+
+    """
+
+    def __init__(
+        self,
+        host: str,
+        failure: VerifyFailure,
+        *,
+        uid: str | None = None,
+        answered_uid: str | None = None,
+    ) -> None:
+        """Create the error for *host* and *failure*."""
+        # No args: OSError would read two positional args as errno/strerror.
+        super().__init__()
+        self.host = host
+        self.failure = failure
+        self.uid = uid
+        self.answered_uid = answered_uid
+
+    def __str__(self) -> str:
+        """Plain-English description, for logs and tracebacks."""
+        target = f"iZone controller {self.uid}" if self.uid else "iZone controller"
+        reason = _failure_text(self.failure, self.answered_uid)
+        return f"{target} at {self.host}: {reason}"
 
 
 class ResponseDecodeError(ConnectionError):

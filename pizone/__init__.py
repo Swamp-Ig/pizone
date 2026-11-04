@@ -35,12 +35,18 @@ from .discovery import DiscoveryService, create_discovery
 from .exceptions import (
     ControllerAlreadyClaimedError,
     ControllerCommandError,
+    EndpointVerifyError,
     InvalidValueError,
     ResponseDecodeError,
     UnpairedBridgeError,
 )
 from .power import BatteryLevel, Power, PowerChannel, PowerDevice, PowerGroup
-from .types import ControllerEndpoint
+from .types import (
+    ControllerEndpoint,
+    DiscoveredEndpoints,
+    UnverifiedEndpoint,
+    VerifyFailure,
+)
 from .zone import Zone
 
 
@@ -71,7 +77,9 @@ __all__ = [
     "ControllerAlreadyClaimedError",
     "ControllerCommandError",
     "ControllerEndpoint",
+    "DiscoveredEndpoints",
     "DiscoveryService",
+    "EndpointVerifyError",
     "InvalidValueError",
     "Power",
     "PowerChannel",
@@ -79,6 +87,8 @@ __all__ = [
     "PowerGroup",
     "ResponseDecodeError",
     "UnpairedBridgeError",
+    "UnverifiedEndpoint",
+    "VerifyFailure",
     "Zone",
     "create_discovery",
 ]

@@ -31,8 +31,18 @@ import ifaddr
 from . import v2 as v2_mod
 from .const import PLACEHOLDER_DEVICE_UID
 from .controller import Controller
-from .exceptions import ControllerAlreadyClaimedError, raise_if_placeholder_uid
-from .types import ControllerEndpoint, ControllerProbe
+from .exceptions import (
+    ControllerAlreadyClaimedError,
+    EndpointVerifyError,
+    raise_if_placeholder_uid,
+)
+from .types import (
+    ControllerEndpoint,
+    ControllerProbe,
+    DiscoveredEndpoints,
+    UnverifiedEndpoint,
+    VerifyFailure,
+)
 
 DISCOVERY_MSG = b"IASD"  # cspell:disable-line
 DISCOVERY_PORT = 12107
@@ -90,6 +100,25 @@ class _State(Enum):
     CLAIMED = auto()  # A live controller owns it.
 
 
+@dataclass(frozen=True, slots=True)
+class _ProbeFailed:
+    """Why one HTTP probe found no usable controller."""
+
+    failure: VerifyFailure
+    answered_uid: str | None = None
+
+
+# _probe_first reports the most informative failure across addresses.
+_FAILURE_RANK = {
+    VerifyFailure.UNRESOLVED: 0,
+    VerifyFailure.NO_REPLY: 1,
+    VerifyFailure.UNREADABLE: 2,
+    VerifyFailure.OTHER_UID: 3,
+}
+
+type _VerifyResult = ControllerEndpoint | UnverifiedEndpoint | None
+
+
 @dataclass(slots=True)
 class _Entry:
     state: _State
@@ -98,7 +127,7 @@ class _Entry:
     # In-flight HTTP verify of a UDP-reported host. For SEEN it is the endpoint;
     # for KNOWN/CLAIMED a move that applies only once it answers.
     candidate: ControllerEndpoint | None = None
-    verify: Task[ControllerEndpoint | None] | None = None
+    verify: Task[_VerifyResult] | None = None
 
 
 class DiscoveryService:
@@ -342,9 +371,7 @@ class DiscoveryService:
         self._endpoints[endpoint.uid] = _Entry(_State.KNOWN, endpoint)
         self._emit_endpoint_discovered(endpoint)
 
-    def _verify_endpoint(
-        self, endpoint: ControllerEndpoint
-    ) -> Task[ControllerEndpoint | None]:
+    def _verify_endpoint(self, endpoint: ControllerEndpoint) -> Task[_VerifyResult]:
         """Return the in-flight HTTP verify for *endpoint*, starting one if needed.
 
         A KNOWN or CLAIMED entry keeps its current endpoint until the new host
@@ -365,26 +392,32 @@ class DiscoveryService:
         entry.verify = self.create_task(self._run_verify(entry, endpoint))
         return entry.verify
 
-    async def _await_verify(
-        self, endpoint: ControllerEndpoint
-    ) -> ControllerEndpoint | None:
+    async def _await_verify(self, endpoint: ControllerEndpoint) -> _VerifyResult:
         """Wait for *endpoint* to verify; a cancelled waiter leaves the verify running."""
         return await asyncio.shield(self._verify_endpoint(endpoint))
 
     async def _run_verify(
         self, entry: _Entry, candidate: ControllerEndpoint
-    ) -> ControllerEndpoint | None:
-        """HTTP-verify *candidate* for *entry*; apply it, or drop it."""
+    ) -> _VerifyResult:
+        """HTTP-verify *candidate* for *entry*; apply it, or drop it.
+
+        Returns the verified endpoint, why it failed, or ``None`` when the
+        verify was superseded or the UID is the unpaired placeholder.
+        """
         uid = candidate.uid
         probed = await self._probe(candidate.host, expected_uid=uid)
         if self._endpoints.get(uid) is not entry or entry.candidate != candidate:
             # Superseded by a newer host, a claim, a release, or a direct probe.
             return None
         entry.candidate = None
-        if probed is None or uid == PLACEHOLDER_DEVICE_UID:
+        if isinstance(probed, _ProbeFailed) or uid == PLACEHOLDER_DEVICE_UID:
             if entry.state is _State.SEEN:
                 del self._endpoints[uid]
-            return None
+            if not isinstance(probed, _ProbeFailed):
+                return None
+            unverified = _unverified(candidate, probed)
+            _LOG.debug("UDP reply failed the HTTP check: %s", unverified)
+            return unverified
         self._apply_verified(probed.endpoint)
         return probed.endpoint
 
@@ -407,11 +440,15 @@ class DiscoveryService:
         unclaimed endpoint is notified.
 
         Raises:
+            EndpointVerifyError: If the name doesn't resolve or no address
+                answers with usable controller settings.
             UnpairedBridgeError: If the probed UID is the unpaired placeholder;
                 the endpoint is not recorded.
 
         """
         addresses = await self._resolve(host)
+        if not addresses:
+            raise EndpointVerifyError(host, VerifyFailure.UNRESOLVED)
         for address in addresses:
             owned = self._entry_by_host(
                 address, _State.CLAIMING, _State.CLAIMED, _State.KNOWN
@@ -420,12 +457,16 @@ class DiscoveryService:
                 return owned.endpoint
         for address in addresses:
             pending = self._verifying_host(address)
-            if pending is not None and (verified := await self._await_verify(pending)):
+            if pending is not None and isinstance(
+                verified := await self._await_verify(pending), ControllerEndpoint
+            ):
                 return verified
 
         probed = await self._probe_first(addresses)
-        if probed is None:
-            return None
+        if isinstance(probed, _ProbeFailed):
+            raise EndpointVerifyError(
+                host, probed.failure, answered_uid=probed.answered_uid
+            )
         raise_if_placeholder_uid(probed.endpoint.uid)
         self._apply_verified(probed.endpoint)
         return probed.endpoint
@@ -435,26 +476,37 @@ class DiscoveryService:
 
         User-initiated lookup. Cache hits skip re-probe.
 
+        Returns ``None`` if *uid* doesn't reply over UDP.
+
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
             ControllerAlreadyClaimedError: If a controller with *uid* is created
                 or being created when the call starts.
+            EndpointVerifyError: If *uid* replied over UDP but its address failed
+                the HTTP check.
 
         """
         raise_if_placeholder_uid(uid)
         self._ensure_uid_available(uid)
         if (known := self._entry(uid, _State.KNOWN)) is not None:
             return known.endpoint
-        if (seen := self._entry(uid, _State.SEEN)) is not None and (
-            verified := await self._await_verify(seen.endpoint)
+        if (seen := self._entry(uid, _State.SEEN)) is not None and isinstance(
+            verified := await self._await_verify(seen.endpoint), ControllerEndpoint
         ):
             return verified
-        endpoint = await self._scan_for_uid(uid)
-        if endpoint is not None:
-            self._apply_verified(endpoint)
-        return endpoint
+        result = await self._scan_for_uid(uid)
+        if isinstance(result, UnverifiedEndpoint):
+            raise EndpointVerifyError(
+                result.endpoint.host,
+                result.failure,
+                uid=uid,
+                answered_uid=result.answered_uid,
+            )
+        if result is not None:
+            self._apply_verified(result)
+        return result
 
-    async def _scan_for_uid(self, uid: str) -> ControllerEndpoint | None:
+    async def _scan_for_uid(self, uid: str) -> _VerifyResult:
         """Broadcast IASD, wait for *uid*, and HTTP-verify it (no caching).
 
         Joins a verify already in flight for the reply, else probes directly so a
@@ -484,10 +536,15 @@ class DiscoveryService:
                     return await self._await_verify(endpoint)
 
             probed = await self._probe(host, expected_uid=uid)
-            return probed.endpoint if probed is not None else None
+            if isinstance(probed, _ProbeFailed):
+                return _unverified(endpoint, probed)
+            return probed.endpoint
 
-    async def discover_all(self) -> list[ControllerEndpoint]:
+    async def discover_all(self) -> DiscoveredEndpoints:
         """Broadcast IASD, collect replies, and HTTP-verify each new endpoint.
+
+        Returns the verified endpoints. Endpoints that replied during this call
+        but failed the HTTP check are in the result's ``unverified``.
 
         Invokes ``on_endpoint_discovered`` once per verified uid for this call.
         ASPort during the wait uses the normal discovery notify path (verified
@@ -515,9 +572,10 @@ class DiscoveryService:
 
     async def _verify_collected(
         self, collector: dict[str, str], notified: set[str]
-    ) -> list[ControllerEndpoint]:
+    ) -> DiscoveredEndpoints:
         """Verify collected endpoints, notifying known ones not yet notified."""
         verified: list[ControllerEndpoint] = []
+        unverified: list[UnverifiedEndpoint] = []
         for uid, host in collector.items():
             endpoint = ControllerEndpoint(uid=uid, host=host)
             if self._entry(uid, _State.CLAIMING, _State.CLAIMED) is not None:
@@ -525,12 +583,15 @@ class DiscoveryService:
             known = self._entry(uid, _State.KNOWN)
             if known is None or known.endpoint != endpoint:
                 # A successful verify notifies via _emit_endpoint_discovered.
-                if await self._await_verify(endpoint) is None:
+                result = await self._await_verify(endpoint)
+                if isinstance(result, UnverifiedEndpoint):
+                    unverified.append(result)
+                if not isinstance(result, ControllerEndpoint):
                     continue
             verified.append(endpoint)
             if uid not in notified:
                 self._emit_endpoint_discovered(endpoint)
-        return verified
+        return DiscoveredEndpoints(verified, unverified=unverified)
 
     async def create_controller(
         self,
@@ -550,8 +611,8 @@ class DiscoveryService:
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
             ControllerAlreadyClaimedError: If a controller with *uid* already exists.
-            ConnectionError: If the controller cannot be reached after
-                address fallback.
+            EndpointVerifyError: If the controller cannot be reached after
+                address fallback (a :exc:`ConnectionError`).
             ControllerCommandError: If the device rejects the protocol request.
             ResponseDecodeError: If the device returns malformed data.
             KeyError: If a required field is missing from a device response.
@@ -575,8 +636,10 @@ class DiscoveryService:
             except ConnectionError:
                 if prior is not None:
                     fallback = prior.endpoint
-                else:
-                    fallback = await self._scan_for_uid(uid)
+                elif isinstance(
+                    scanned := await self._scan_for_uid(uid), ControllerEndpoint
+                ):
+                    fallback = scanned
                 if fallback is None or fallback.host == host:
                     raise
                 pending_address_changed = fallback
@@ -618,8 +681,10 @@ class DiscoveryService:
         on_address_changed: Callable[[ControllerEndpoint], None] | None,
     ) -> Controller:
         probed = await self._probe_first(await self._resolve(host), expected_uid=uid)
-        if probed is None:
-            raise ConnectionError(f"Unable to connect to controller {uid} at {host}")
+        if isinstance(probed, _ProbeFailed):
+            raise EndpointVerifyError(
+                host, probed.failure, uid=uid, answered_uid=probed.answered_uid
+            )
 
         controller = await self._controller_cls.create(
             self,
@@ -655,27 +720,31 @@ class DiscoveryService:
 
     async def _probe_first(
         self, addresses: list[str], *, expected_uid: str | None = None
-    ) -> ControllerProbe | None:
+    ) -> ControllerProbe | _ProbeFailed:
         """Probe *addresses* concurrently; return the first controller that answers.
 
         Concurrent so a dead address (e.g. a stale DNS record) doesn't cost a
         full timeout before the next is tried. Two addresses can be the same
         bridge, which then sees overlapping requests it handles poorly; accepted
-        because a name resolving to several addresses is rare.
+        because a name resolving to several addresses is rare. When every
+        address fails, the most informative failure is returned.
         """
         if not addresses:
-            return None
+            return _ProbeFailed(VerifyFailure.UNRESOLVED)
         if len(addresses) == 1:
             return await self._probe(addresses[0], expected_uid=expected_uid)
         tasks = [
             asyncio.ensure_future(self._probe(address, expected_uid=expected_uid))
             for address in addresses
         ]
+        failures: list[_ProbeFailed] = []
         try:
             for next_done in asyncio.as_completed(tasks):
-                if (probed := await next_done) is not None:
+                probed = await next_done
+                if isinstance(probed, ControllerProbe):
                     return probed
-            return None
+                failures.append(probed)
+            return max(failures, key=lambda failed: _FAILURE_RANK[failed.failure])
         finally:
             for task in tasks:
                 task.cancel()
@@ -683,56 +752,29 @@ class DiscoveryService:
 
     async def _probe(
         self, host: str, *, expected_uid: str | None = None
-    ) -> ControllerProbe | None:
+    ) -> ControllerProbe | _ProbeFailed:
         """Probe controller; prefer useful V2 SystemV2, else V1 SystemSettings.
 
-        Returns None when unreachable, malformed, or not *expected_uid*.
+        Returns why it failed when unreachable, malformed, or not *expected_uid*.
         """
         probed = await self._probe_any(host)
-        if probed is None:
-            return None
+        if isinstance(probed, VerifyFailure):
+            return _ProbeFailed(probed)
         if expected_uid is not None and probed.endpoint.uid != expected_uid:
-            return None
+            return _ProbeFailed(VerifyFailure.OTHER_UID, probed.endpoint.uid)
         return probed
 
-    async def _probe_any(self, host: str) -> ControllerProbe | None:
-        """Probe *host* for whichever controller answers."""
+    async def _probe_any(self, host: str) -> ControllerProbe | VerifyFailure:
+        """Probe *host* for whichever controller answers.
+
+        When both V2 and V1 fail, the V1 outcome is reported.
+        """
         session = self._session
         if session is None:
-            return None
+            return VerifyFailure.NO_REPLY
         if (v2_probe := await _probe_v2(session, host)) is not None:
             return v2_probe
-
-        try:
-            async with session.get(
-                f"http://{host}/SystemSettings",
-                timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
-            ) as response:
-                if response.status >= 400:
-                    return None
-                try:
-                    data = await response.json(content_type=None)
-                except json.JSONDecodeError:
-                    text = await response.text()
-                    if len(text) < 4 or text[-4:] != "{OK}":
-                        return None
-                    try:
-                        data = json.loads(text[:-4])
-                    except json.JSONDecodeError:
-                        return None
-        except TimeoutError, aiohttp.ClientError, OSError, UnicodeDecodeError:
-            return None
-
-        if not isinstance(data, dict):
-            return None
-        v1_uid = data.get("AirStreamDeviceUId")
-        if not isinstance(v1_uid, str) or not v1_uid:
-            return None
-        return ControllerProbe(
-            endpoint=ControllerEndpoint(uid=v1_uid, host=host),
-            system_settings=data,
-            read_api="v1",
-        )
+        return await _probe_v1(session, host)
 
     async def close(self) -> None:
         """Stop discovery, close the UDP transport, and cancel tracked tasks."""
@@ -905,6 +947,44 @@ class DiscoveryService:
         self._verify_endpoint(endpoint)
 
 
+async def _probe_v1(
+    session: ClientSession, host: str
+) -> ControllerProbe | VerifyFailure:
+    """Probe *host* for V1 SystemSettings; report why it failed if unusable."""
+    try:
+        async with session.get(
+            f"http://{host}/SystemSettings",
+            timeout=aiohttp.ClientTimeout(total=Controller.REQUEST_TIMEOUT),
+        ) as response:
+            if response.status >= 400:
+                return VerifyFailure.UNREADABLE
+            try:
+                data = await response.json(content_type=None)
+            except json.JSONDecodeError:
+                text = await response.text()
+                if len(text) < 4 or text[-4:] != "{OK}":
+                    return VerifyFailure.UNREADABLE
+                try:
+                    data = json.loads(text[:-4])
+                except json.JSONDecodeError:
+                    return VerifyFailure.UNREADABLE
+    except UnicodeDecodeError:
+        return VerifyFailure.UNREADABLE
+    except TimeoutError, aiohttp.ClientError, OSError:
+        return VerifyFailure.NO_REPLY
+
+    if not isinstance(data, dict):
+        return VerifyFailure.UNREADABLE
+    v1_uid = data.get("AirStreamDeviceUId")
+    if not isinstance(v1_uid, str) or not v1_uid:
+        return VerifyFailure.UNREADABLE
+    return ControllerProbe(
+        endpoint=ControllerEndpoint(uid=v1_uid, host=host),
+        system_settings=data,
+        read_api="v1",
+    )
+
+
 async def _probe_v2(session: ClientSession, host: str) -> ControllerProbe | None:
     """Probe *host* for a useful SystemV2 that converts to settings."""
     v2_hit = await v2_mod.fetch_useful_system(
@@ -926,6 +1006,18 @@ async def _probe_v2(session: ClientSession, host: str) -> ControllerProbe | None
         system_settings=settings,
         read_api="v2",
         v2_use_content_type=use_ct,
+    )
+
+
+def _unverified(
+    endpoint: ControllerEndpoint, failed: _ProbeFailed
+) -> UnverifiedEndpoint:
+    """Describe a failed HTTP check of *endpoint* as of now."""
+    return UnverifiedEndpoint(
+        endpoint=endpoint,
+        failure=failed.failure,
+        answered_uid=failed.answered_uid,
+        at=datetime.now(UTC),
     )
 
 

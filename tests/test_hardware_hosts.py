@@ -18,7 +18,13 @@ from unittest.mock import patch
 
 import pytest
 
-from pizone import Controller, ControllerEndpoint, DiscoveryService
+from pizone import (
+    Controller,
+    ControllerEndpoint,
+    DiscoveryService,
+    EndpointVerifyError,
+    VerifyFailure,
+)
 
 # Reserved TLD, so it can never resolve for real.
 BRIDGE_NAME = "izone-bridge.test"
@@ -109,6 +115,15 @@ async def test_discover_by_host_repoints_moved_controller(
     assert seen == [bridge]
     await controller.refresh_all()
     assert controller.connected
+
+
+@pytest.mark.hardware
+async def test_discover_by_host_wrong_host_raises_no_reply(
+    live_service: DiscoveryService,
+) -> None:
+    with pytest.raises(EndpointVerifyError) as exc_info:
+        await live_service.discover_by_host(WRONG_HOST)
+    assert exc_info.value.failure is VerifyFailure.NO_REPLY
 
 
 @pytest.mark.hardware
