@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from copy import deepcopy
 import logging
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -733,12 +733,15 @@ async def test_refresh_transport_failure_nudges_scan() -> None:
     controller._connected = False
     scan = AsyncMock()
     service.scan = scan  # type: ignore[method-assign]
+    name_check = Mock()
+    service.schedule_name_check = name_check  # type: ignore[method-assign]
 
     with pytest.raises(ConnectionError):
         await controller.refresh_all()
 
     await asyncio.sleep(0)
     scan.assert_awaited_once()
+    name_check.assert_called_once_with("000000001")
     assert controller.bridge_connected is False
     await service.close()
 

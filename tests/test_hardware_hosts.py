@@ -159,3 +159,33 @@ async def test_passive_reply_from_same_ip_is_not_a_move(
     assert live_service._endpoints[bridge.uid].verify is None
     assert controller.device_ip == bridge.host
     assert seen == []
+
+
+@pytest.mark.hardware
+async def test_name_re_resolve_repoints_moved_controller(
+    live_service: DiscoveryService, bridge: ControllerEndpoint
+) -> None:
+    """A refresh failure re-resolves the name and finds the bridge again."""
+    seen: list[ControllerEndpoint] = []
+    with _name_resolves_to(bridge.host):
+        controller = await live_service.create_controller(
+            bridge.uid, BRIDGE_NAME, on_address_changed=seen.append
+        )
+        # Simulate the bridge having moved while UDP was blocked.
+        controller._ip = WRONG_HOST
+        live_service._endpoints[bridge.uid].endpoint = ControllerEndpoint(
+            uid=bridge.uid, host=WRONG_HOST
+        )
+
+        # Only the name check may find it, not a UDP scan.
+        with patch.object(live_service, "schedule_cooled_scan"):
+            with pytest.raises(ConnectionError):
+                await controller.refresh_all()
+            async with asyncio.timeout(Controller.REQUEST_TIMEOUT * 2):
+                while controller.device_ip != bridge.host:
+                    await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
+
+    assert seen == [bridge]
+    await controller.refresh_all()
+    assert controller.connected

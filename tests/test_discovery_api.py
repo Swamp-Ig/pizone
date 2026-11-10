@@ -1778,6 +1778,195 @@ async def test_create_controller_resolves_name_to_ip() -> None:
     await service.close()
 
 
+async def _probe_expected(
+    host: str, *, expected_uid: str | None = None
+) -> ControllerProbe | _ProbeFailed:
+    """Answer as *expected_uid* at any host."""
+    assert expected_uid is not None
+    return _probe_result(expected_uid, host)
+
+
+async def _create_at(
+    service: DiscoveryService,
+    uid: str,
+    host: str,
+    *,
+    resolves_to: str,
+    on_address_changed: list[ControllerEndpoint] | None = None,
+) -> Controller:
+    """Create a controller from *host*, which resolves to *resolves_to*."""
+    with (
+        patch.object(service, "_resolve", AsyncMock(return_value=[resolves_to])),
+        patch.object(service, "_probe", side_effect=_probe_expected),
+        patch.object(MockController, "_initialize", AsyncMock()),
+    ):
+        return await service.create_controller(
+            uid,
+            host,
+            on_address_changed=(
+                on_address_changed.append if on_address_changed is not None else None
+            ),
+        )
+
+
+async def _settle_tasks(service: DiscoveryService) -> None:
+    await asyncio.gather(*(task for task in service._tasks if not task.done()))
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_name_check_repoints_moved_controller() -> None:
+    """A name that now resolves to another IP repoints the controller there."""
+    service = MockDiscoveryService()
+    seen: list[ControllerEndpoint] = []
+    controller = await _create_at(
+        service,
+        "000025841",
+        "izone.lan",
+        resolves_to="10.0.0.90",
+        on_address_changed=seen,
+    )
+    moved = ControllerEndpoint(uid="000025841", host="10.0.0.91")
+
+    with (
+        patch.object(service, "_resolve", AsyncMock(return_value=[moved.host])),
+        patch.object(service, "_probe", side_effect=_probe_expected),
+    ):
+        service.schedule_name_check(moved.uid)
+        await _settle_tasks(service)
+
+    assert controller.device_ip == moved.host
+    assert service._endpoints_in(_State.CLAIMED) == {moved.uid: moved}
+    assert seen == [moved]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_name_check_current_ip_skips_probe() -> None:
+    """When the name still resolves to the current IP, the bridge is just down."""
+    service = MockDiscoveryService()
+    controller = await _create_at(
+        service, "000025841", "izone.lan", resolves_to="10.0.0.90"
+    )
+    probe = AsyncMock()
+
+    with (
+        patch.object(service, "_resolve", AsyncMock(return_value=["10.0.0.90"])),
+        patch.object(service, "_probe", probe),
+    ):
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    probe.assert_not_awaited()
+    assert controller.device_ip == "10.0.0.90"
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_name_check_defers_to_udp_verify_in_flight() -> None:
+    """A UDP verify already checking the resolved address isn't probed again."""
+    service = MockDiscoveryService()
+    await _create_at(service, "000025841", "izone.lan", resolves_to="10.0.0.90")
+    service._endpoints["000025841"].candidate = ControllerEndpoint(
+        uid="000025841", host="10.0.0.91"
+    )
+    probe = AsyncMock()
+
+    with (
+        patch.object(service, "_resolve", AsyncMock(return_value=["10.0.0.91"])),
+        patch.object(service, "_probe", probe),
+    ):
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    probe.assert_not_awaited()
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_name_check_other_uid_does_not_repoint() -> None:
+    """A different controller answering at the new address is ignored."""
+    service = MockDiscoveryService()
+    seen: list[ControllerEndpoint] = []
+    controller = await _create_at(
+        service,
+        "000025841",
+        "izone.lan",
+        resolves_to="10.0.0.90",
+        on_address_changed=seen,
+    )
+
+    with (
+        patch.object(service, "_resolve", AsyncMock(return_value=["10.0.0.91"])),
+        patch.object(
+            service,
+            "_probe",
+            AsyncMock(return_value=_ProbeFailed(VerifyFailure.OTHER_UID, "000099999")),
+        ),
+    ):
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    assert controller.device_ip == "10.0.0.90"
+    assert seen == []
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_name_check_skips_ip_literal() -> None:
+    """A controller created from an IPv4 address has no name to re-resolve."""
+    service = MockDiscoveryService()
+    await _create_at(service, "000025841", "10.0.0.90", resolves_to="10.0.0.90")
+    resolve = AsyncMock()
+
+    with patch.object(service, "_resolve", resolve):
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    resolve.assert_not_awaited()
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_name_check_cooldown_is_per_controller() -> None:
+    """A second check inside the cooldown is skipped, without blocking others."""
+    service = MockDiscoveryService()
+    await _create_at(service, "000025841", "first.lan", resolves_to="10.0.0.90")
+    await _create_at(service, "000025842", "second.lan", resolves_to="10.0.0.92")
+    resolve = AsyncMock(return_value=[])
+
+    with patch.object(service, "_resolve", resolve):
+        service.schedule_name_check("000025841")
+        service.schedule_name_check("000025841")
+        service.schedule_name_check("000025842")
+        await _settle_tasks(service)
+
+    assert [call.args for call in resolve.await_args_list] == [
+        ("first.lan",),
+        ("second.lan",),
+    ]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_name_check_skips_closed_controller() -> None:
+    """Closing a controller drops its name with the claim."""
+    service = MockDiscoveryService()
+    controller = await _create_at(
+        service, "000025841", "izone.lan", resolves_to="10.0.0.90"
+    )
+    await controller.close()
+    resolve = AsyncMock()
+
+    with patch.object(service, "_resolve", resolve):
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    resolve.assert_not_awaited()
+    assert service._endpoints["000025841"].host_name is None
+    await service.close()
+
+
 @pytest.mark.asyncio
 async def test_create_controller_unresolvable_name_falls_back_to_scan() -> None:
     service = MockDiscoveryService()

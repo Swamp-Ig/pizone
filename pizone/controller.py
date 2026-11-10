@@ -211,10 +211,11 @@ class Controller:
                     self._set_bridge_ok(True)
 
     def _nudge_scan(self) -> None:
-        """Non-blocking cooled-down IASD scan after HTTP transport failure."""
+        """Non-blocking cooled-down rediscovery after HTTP transport failure."""
         if self._closed:
             return
         self._discovery_service.schedule_cooled_scan()
+        self._discovery_service.schedule_name_check(self._device_uid)
 
     @classmethod
     async def create(

@@ -119,6 +119,15 @@ _FAILURE_RANK = {
 type _VerifyResult = ControllerEndpoint | UnverifiedEndpoint | None
 
 
+def _is_ipv4(host: str) -> bool:
+    """Return whether *host* is an IPv4 address rather than a name."""
+    try:
+        IPv4Address(host)
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass(slots=True)
 class _Entry:
     state: _State
@@ -128,6 +137,10 @@ class _Entry:
     # for KNOWN/CLAIMED a move that applies only once it answers.
     candidate: ControllerEndpoint | None = None
     verify: Task[_VerifyResult] | None = None
+    # CLAIMED only: the name the controller was created from, re-resolved
+    # after a transport failure since UDP discovery may not reach the bridge.
+    host_name: str | None = None
+    last_name_check: float = float("-inf")
 
 
 class DiscoveryService:
@@ -294,6 +307,43 @@ class DiscoveryService:
                 _LOG.debug("Cooled scan nudge failed", exc_info=True)
 
         asyncio.get_running_loop().create_task(_run())
+
+    def schedule_name_check(self, uid: str) -> None:
+        """Re-resolve a claimed controller's name in the background, if it has one.
+
+        Repoints the controller when its UID answers at a new address. Cooled
+        down per UID.
+        """
+        if self.is_closed:
+            return
+        entry = self._entry(uid, _State.CLAIMED)
+        if entry is None or (name := entry.host_name) is None:
+            return
+        now = asyncio.get_running_loop().time()
+        if now - entry.last_name_check < RESCAN_COOLDOWN:
+            return
+        entry.last_name_check = now
+
+        async def _run() -> None:
+            try:
+                addresses = await self._resolve(name)
+                if entry.endpoint.host in addresses:
+                    return
+                if entry.candidate is not None and entry.candidate.host in addresses:
+                    return  # A UDP verify of that address is already in flight.
+                probed = await self._probe_first(addresses, expected_uid=uid)
+                if isinstance(probed, _ProbeFailed):
+                    _LOG.debug(
+                        "Name %s for %s did not verify: %s", name, uid, probed.failure
+                    )
+                    return
+                if self.is_closed or self._endpoints.get(uid) is not entry:
+                    return
+                self._apply_verified(probed.endpoint)
+            except Exception:  # noqa: BLE001
+                _LOG.debug("Name check for %s failed", uid, exc_info=True)
+
+        self.create_task(_run())
 
     def _entry(self, uid: str, *states: _State) -> _Entry | None:
         """Return the entry for *uid* when it is in one of *states*."""
@@ -604,9 +654,10 @@ class DiscoveryService:
 
         Preferred entry point after :func:`create_discovery`. One-shot per
         UID. *host* may be an IPv4 address or a name; a name is resolved and
-        the controller runs on the IP that answers. HTTP probe is the trust
-        boundary; callers must handle the device being unreachable even after a
-        recent discovery notify.
+        the controller runs on the IP that answers. The name is resolved again
+        after a transport failure, in case the bridge moved. HTTP probe is the
+        trust boundary; callers must handle the device being unreachable even
+        after a recent discovery notify.
 
         Raises:
             UnpairedBridgeError: If *uid* is the unpaired placeholder (no I/O).
@@ -656,6 +707,9 @@ class DiscoveryService:
             else:
                 del self._endpoints[uid]
             raise
+
+        if not _is_ipv4(host) and (claimed := self._entry(uid, _State.CLAIMED)):
+            claimed.host_name = host
 
         if pending_address_changed is not None and on_address_changed is not None:
             self.schedule_address_changed(on_address_changed, pending_address_changed)
