@@ -148,8 +148,11 @@ class PowerDevice:
 class PowerGroup:
     """Grouped power channels."""
 
-    def __init__(self, power: Power, channels: Iterable[PowerChannel]) -> None:
+    def __init__(
+        self, power: Power, group_number: int, channels: Iterable[PowerChannel]
+    ) -> None:
         self._power = power
+        self._group_number = group_number
         self._channels = tuple(channels)
         devices: set[PowerDevice] = set()
         for chan in channels:
@@ -159,7 +162,7 @@ class PowerGroup:
     @property
     def group_number(self) -> int:
         """The group id."""
-        return self._channels[0].group_number or -1
+        return self._group_number
 
     @property
     def name(self) -> str:
@@ -218,7 +221,9 @@ class Power:
             for chan in dev.channels:
                 if chan.group_number is not None:
                     gdict.setdefault(chan.group_number, []).append(chan)
-        self._groups = tuple(PowerGroup(self, gl) for gl in gdict.values())
+        self._groups = tuple(
+            PowerGroup(self, number, chans) for number, chans in gdict.items()
+        )
 
     async def refresh(self) -> bool:
         """Refresh power usage data from the device.
