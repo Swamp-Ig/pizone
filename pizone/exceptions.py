@@ -1,5 +1,7 @@
 """pizone-specific exceptions."""
 
+from typing import Any
+
 from .const import PLACEHOLDER_DEVICE_UID
 from .types import VerifyFailure, _failure_text
 
@@ -11,6 +13,39 @@ class ControllerCommandError(Exception):
     device is reachable. Not used for transport failures (timeouts, connection
     refused, etc.) — those remain :exc:`ConnectionError`.
     """
+
+
+class DeviceReconfigurationError(Exception):
+    """The system no longer matches the controller built at connect.
+
+    Raised once a clean read shows that an installer has reprogrammed the
+    system, for example the number of zones or a zone type changed. The
+    controller stays this way: every refresh and command raises this until it
+    is closed and a new one is created with
+    :meth:`~pizone.discovery.DiscoveryService.create_controller`.
+
+    Not a :exc:`ConnectionError`: the device is reachable and answering.
+
+    Attributes:
+        changes: Each changed field, mapped to its value at connect and its
+            new value. Zone types use keys like ``"Zone 3 Type"``.
+
+    """
+
+    def __init__(self, changes: dict[str, tuple[Any, Any]]) -> None:
+        """Create the error for *changes*."""
+        super().__init__()
+        self.changes = changes
+
+    def __str__(self) -> str:
+        """Plain-English description, for logs and tracebacks."""
+        detail = ", ".join(
+            f"{field} {old!r} -> {new!r}" for field, (old, new) in self.changes.items()
+        )
+        return (
+            f"iZone system was reconfigured ({detail}); close this controller "
+            "and create a new one"
+        )
 
 
 class InvalidValueError(ValueError, AttributeError):

@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any, Literal, Self, cast
 import aiohttp
 
 from . import power as power_mod, v2 as v2_mod
-from .exceptions import ControllerCommandError, InvalidValueError, ResponseDecodeError
+from .exceptions import (
+    ControllerCommandError,
+    DeviceReconfigurationError,
+    InvalidValueError,
+    ResponseDecodeError,
+)
 from .power import Power
 from .types import ControllerEndpoint, ControllerProbe
 from .zone import Zone
@@ -43,8 +48,17 @@ def _refresh_api(
 
     @wraps(method)
     async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-        async with self._refresh_scope():
-            return await method(self, *args, **kwargs)
+        self._raise_if_reconfigured()
+        try:
+            async with self._refresh_scope():
+                result = await method(self, *args, **kwargs)
+        except Exception as ex:
+            # A read in this refresh saw the reconfigure; that outranks its errors.
+            if self._reconfigured is not None:
+                raise DeviceReconfigurationError(dict(self._reconfigured)) from ex
+            raise
+        self._raise_if_reconfigured()
+        return result
 
     return wrapper
 
@@ -175,6 +189,9 @@ class Controller:
         self._izone_ok: bool = True
         self._fault_fields: tuple[str, ...] = ()
         self._last_fault: dict[str, Any] | None = None
+        # System fields the zones and fan modes were built from at connect.
+        self._built_from: dict[str, Any] | None = None
+        self._reconfigured: dict[str, tuple[Any, Any]] | None = None
         self._on_address_changed: Callable[[ControllerEndpoint], None] | None = None
 
         self._sending_lock = Lock()
@@ -260,18 +277,22 @@ class Controller:
             if settings is None:
                 raise ConnectionError("SystemSettings device ID mismatch")
 
-            if self._system_settings:
-                fan_auto = str(self._system_settings.get("FanAuto", "disabled"))
-                self.fan_modes = Controller._VALID_FAN_MODES.get(
-                    fan_auto, Controller._VALID_FAN_MODES["unknown"]
-                )
-            else:
-                self.fan_modes = Controller._VALID_FAN_MODES["disabled"]
+            self.fan_modes = Controller._VALID_FAN_MODES.get(
+                self._fan_auto(self._system_settings),
+                Controller._VALID_FAN_MODES["unknown"],
+            )
 
             zone_count = int(settings["NoOfZones"])
             self.zones = [Zone(self, i) for i in range(zone_count)]
 
             await self._fetch_zones()
+
+            self._built_from = {
+                "NoOfZones": zone_count,
+                "NoOfConst": settings.get("NoOfConst"),
+                "SysType": settings.get("SysType"),
+                "FanAuto": self._fan_auto(self._system_settings),
+            }
 
             await self._probe_power()
 
@@ -347,6 +368,7 @@ class Controller:
             "fan_modes": [fan.value for fan in self.fan_modes],
             "system_settings": dict(self._system_settings),
             "last_fault": self._last_fault,
+            "reconfigured": self._reconfigured,
             "zones": [zone.dump_state() for zone in self.zones],
             "power": self._power.dump_state() if self._power is not None else None,
         }
@@ -849,6 +871,7 @@ class Controller:
         """System + zones [+ power] fetch (no refresh scope)."""
         if self._read_api == "v2":
             await self._fetch_system()
+            self._raise_if_reconfigured()
             await self._fetch_zones()
             await self._fetch_power()
             return
@@ -895,7 +918,55 @@ class Controller:
 
         self._system_settings = values
         self._set_izone_ok(True)
+        if not faults and self._built_from is not None:
+            self._check_reconfigured(values)
         return values
+
+    @staticmethod
+    def _fan_auto(values: ControllerData) -> str:
+        """Return FanAuto as the fan modes read it; absent means disabled."""
+        if not values:
+            return "disabled"
+        return str(values.get("FanAuto", "disabled"))
+
+    def _check_reconfigured(self, values: ControllerData) -> None:
+        """Latch if a clean read no longer matches what was built at connect."""
+        built = cast(dict[str, Any], self._built_from)
+        if (
+            int(values["NoOfZones"]) == built["NoOfZones"]
+            and values.get("NoOfConst") == built["NoOfConst"]
+            and values.get("SysType") == built["SysType"]
+            and self._fan_auto(values) == built["FanAuto"]
+        ):
+            return
+        current = {
+            "NoOfZones": int(values["NoOfZones"]),
+            "NoOfConst": values.get("NoOfConst"),
+            "SysType": values.get("SysType"),
+            "FanAuto": self._fan_auto(values),
+        }
+        self._note_reconfigured(
+            {
+                field: (old, current[field])
+                for field, old in built.items()
+                if current[field] != old
+            }
+        )
+
+    def _note_reconfigured(self, changes: dict[str, tuple[Any, Any]]) -> None:
+        """Latch the reconfigured state; it only clears with a new controller."""
+        if self._reconfigured is None:
+            self._reconfigured = {}
+            _LOG.warning(
+                "iZone system reconfigured uid=%s: %s",
+                self._device_uid,
+                DeviceReconfigurationError(changes),
+            )
+        self._reconfigured.update(changes)
+
+    def _raise_if_reconfigured(self) -> None:
+        if self._reconfigured is not None:
+            raise DeviceReconfigurationError(dict(self._reconfigured))
 
     def _record_faults(
         self, values: ControllerData, faults: list[str], *, offline: bool
@@ -977,8 +1048,10 @@ class Controller:
 
         Raises:
             ConnectionError: If the HTTP request fails.
+            DeviceReconfigurationError: If the system was reconfigured.
 
         """
+        self._raise_if_reconfigured()
         if send is None:
             send = value
 
@@ -1008,6 +1081,7 @@ class Controller:
         self, command: str, data: dict[str, Any], zone_index: int
     ) -> None:
         """POST a zone command and confirm with a zone refresh."""
+        self._raise_if_reconfigured()
         async with self._sending_lock, self._refresh_scope():
             if self._read_api == "v2":
                 if self._closed:
@@ -1082,7 +1156,11 @@ class Controller:
         """Bounded, read-only confirmation; never resend a zone command."""
         loop = asyncio.get_running_loop()
         try:
-            while self._zone_mode_confirmations and not self._closed:
+            while (
+                self._zone_mode_confirmations
+                and not self._closed
+                and self._reconfigured is None
+            ):
                 self._expire_zone_modes(loop.time())
                 if not self._zone_mode_confirmations:
                     break

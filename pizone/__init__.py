@@ -35,6 +35,7 @@ from .discovery import DiscoveryService, create_discovery
 from .exceptions import (
     ControllerAlreadyClaimedError,
     ControllerCommandError,
+    DeviceReconfigurationError,
     EndpointVerifyError,
     InvalidValueError,
     ResponseDecodeError,
@@ -77,6 +78,7 @@ __all__ = [
     "ControllerAlreadyClaimedError",
     "ControllerCommandError",
     "ControllerEndpoint",
+    "DeviceReconfigurationError",
     "DiscoveredEndpoints",
     "DiscoveryService",
     "EndpointVerifyError",

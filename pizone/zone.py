@@ -90,6 +90,8 @@ class Zone:
         self._zone_data: Zone.ZoneData = {}
         self._index = index
         self._controller = controller
+        # Zone type at connect; None until the first clean read sets it.
+        self._built_type: Zone.DictValue | None = None
 
     @property
     def index(self) -> int:
@@ -278,9 +280,16 @@ class Zone:
         """
         if zone_data["Index"] != self._index:
             raise AttributeError("Can't change index of existing zone.")
-        if str(zone_data.get("Type")) == "error":
+        zone_type = zone_data.get("Type")
+        if str(zone_type) == "error":
             return
         self._zone_data = zone_data
+        if self._built_type is None:
+            self._built_type = zone_type
+        elif zone_type != self._built_type:
+            self._controller._note_reconfigured(  # noqa: SLF001
+                {f"Zone {self._index + 1} Type": (self._built_type, zone_type)}
+            )
 
     def _get_zone_state(self, state: str) -> DictValue:
         return self._zone_data[state]
