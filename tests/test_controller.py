@@ -1005,6 +1005,36 @@ async def test_v2_free_air_falls_back_and_stays_on_v1() -> None:
 
 
 @pytest.mark.asyncio
+async def test_v2_set_mode_stops_when_free_air_off_is_replaced() -> None:
+    """A newer set_mode that replaces our FreeAir off also decides SysMode."""
+    svc, controller = await _v2_free_air_controller()
+    controller._system_settings["FreeAir"] = "on"
+    controller.V2_ERROR_RETRY_INTERVAL = 0.1
+    controller.V2_ERROR_RETRY_WINDOW = 1.0
+    sent: list[dict[str, object]] = []
+
+    async def send(payload: dict[str, object]) -> str:
+        sent.append(payload)
+        if len(sent) == 1:
+            raise ControllerCommandError("Server returned error state {ERROR}")
+        return ""
+
+    controller._http_command_v2 = send  # type: ignore[method-assign]
+
+    older = asyncio.create_task(controller.set_mode(Controller.Mode.COOL))
+    await asyncio.sleep(0.05)
+    await controller.set_mode(Controller.Mode.HEAT)
+    await older
+
+    assert sent == [
+        {"iSaveOn": 0},
+        {"iSaveOn": 0},
+        {"SysMode": v2_mod.mode_to_wire(Controller.Mode.HEAT)},
+    ]
+    await svc.close()
+
+
+@pytest.mark.asyncio
 async def test_v2_other_commands_do_not_fall_back_on_command_error() -> None:
     """Only FreeAir's known-unreliable V2 command gets a V1 fallback."""
     svc, controller = await _v2_free_air_controller()

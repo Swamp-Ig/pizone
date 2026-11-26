@@ -456,8 +456,11 @@ class Controller:
                 raise InvalidValueError("Free air system is not enabled")
             await self._set_system_state("FreeAir", "FreeAir", "on")
         else:
-            if self.free_air:
-                await self._set_system_state("FreeAir", "FreeAir", "off")
+            # A newer FreeAir write replaced ours; let it decide the mode.
+            if self.free_air and not await self._set_system_state(
+                "FreeAir", "FreeAir", "off"
+            ):
+                return
             await self._set_system_state("SysMode", "SystemMODE", value.value)
 
     @property

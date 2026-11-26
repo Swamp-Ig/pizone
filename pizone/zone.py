@@ -205,8 +205,8 @@ class Zone:
         if value < 0 or value > 100:
             raise InvalidValueError(f"MinAir '{value}' is out of range")
 
-        await self._send_command("AirMinCommand", value)
-        self._zone_data["MinAir"] = value
+        if await self._send_command("AirMinCommand", value):
+            self._zone_data["MinAir"] = value
 
     async def set_airflow_max(self, value: int) -> None:
         """Change the zone maximum airflow in 5% increments.
@@ -221,8 +221,8 @@ class Zone:
         if value < 0 or value > 100:
             raise InvalidValueError(f"MaxAir '{value}' is out of range")
 
-        await self._send_command("AirMaxCommand", value)
-        self._zone_data["MaxAir"] = value
+        if await self._send_command("AirMaxCommand", value):
+            self._zone_data["MaxAir"] = value
 
     async def set_temp_setpoint(self, value: float) -> None:
         """Change the zone temperature setpoint in degrees C.
@@ -243,9 +243,9 @@ class Zone:
         if value < self._controller.temp_min or value > self._controller.temp_max:
             raise InvalidValueError(f"SetPoint '{value}' is out of range")
 
-        await self._send_command("ZoneCommand", value)
-        self._zone_data["Mode"] = "auto"
-        self._zone_data["SetPoint"] = value
+        if await self._send_command("ZoneCommand", value):
+            self._zone_data["Mode"] = "auto"
+            self._zone_data["SetPoint"] = value
 
     async def set_mode(self, value: Zone.Mode) -> None:
         """Set the current zone mode.
@@ -261,14 +261,14 @@ class Zone:
             # V2 can select AUTO without overwriting a newer wall-panel setpoint.
             # V1 still needs the cached setpoint to select temperature control.
             if self._controller._read_api == "v2":  # noqa: SLF001
-                await self._send_command("ZoneCommand", value.value)
+                sent = await self._send_command("ZoneCommand", value.value)
             else:
-                await self._send_command(
+                sent = await self._send_command(
                     "ZoneCommand", self._get_zone_state("SetPoint")
                 )
-            self._zone_data["Mode"] = "auto"
-        else:
-            await self._send_command("ZoneCommand", value.value)
+            if sent:
+                self._zone_data["Mode"] = "auto"
+        elif await self._send_command("ZoneCommand", value.value):
             self._zone_data["Mode"] = value.value
 
     def _update_zone(self, zone_data: Zone.ZoneData) -> None:
@@ -316,14 +316,16 @@ class Zone:
         except KeyError, ValueError:
             return None
 
-    async def _send_command(self, command: str, data: str | float) -> None:
+    async def _send_command(self, command: str, data: str | float) -> bool:
         """Send a zone command via the parent controller.
+
+        Returns False if a newer write to the same field replaced it.
 
         Raises:
             ConnectionError: If the device cannot be reached or the response is invalid.
 
         """
         send_data = {command: {"ZoneNo": str(self._index + 1), "Command": str(data)}}
-        await self._controller._execute_zone_command(  # noqa: SLF001
+        return await self._controller._execute_zone_command(  # noqa: SLF001
             command, send_data, self._index
         )

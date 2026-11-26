@@ -452,8 +452,9 @@ async def test_v2_newer_write_replaces_retrying_write(
     await zone.set_airflow_max(45)
     await retrying
 
-    # The replaced write is not sent again.
+    # The replaced write is not sent again and does not overwrite the cache.
     assert sent == [
         {"ZoneMaxAir": {"Index": 0, "MaxAir": 40}},
         {"ZoneMaxAir": {"Index": 0, "MaxAir": 45}},
     ]
+    assert zone.airflow_max == 45
