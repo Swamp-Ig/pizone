@@ -1,5 +1,6 @@
 """Tests for zone property reads and command validation."""
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from copy import deepcopy
 from typing import cast
@@ -361,3 +362,98 @@ async def test_zone_status_property_decoding(
     zone._zone_data[key] = raw
 
     assert getattr(zone, attr) == expected
+
+
+def _rejecting_send(
+    controller: MockController, rejections: int
+) -> list[dict[str, object]]:
+    """Make iZoneCommandV2 return {ERROR} for the first *rejections* sends."""
+    sent: list[dict[str, object]] = []
+    remaining = rejections
+
+    async def send(payload: dict[str, object]) -> str:
+        nonlocal remaining
+        sent.append(payload)
+        if remaining:
+            remaining -= 1
+            raise ControllerCommandError("Server returned error state {ERROR}")
+        return ""
+
+    controller._http_command_v2 = send  # type: ignore[method-assign]
+    return sent
+
+
+@pytest.fixture
+def fast_retries(v2_controller: MockController) -> MockController:
+    v2_controller.V2_ERROR_RETRY_INTERVAL = 0.01
+    v2_controller.V2_ERROR_RETRY_WINDOW = 1.0
+    return v2_controller
+
+
+@pytest.mark.asyncio
+async def test_v2_command_retries_until_bridge_accepts(
+    fast_retries: MockController,
+) -> None:
+    sent = _rejecting_send(fast_retries, rejections=2)
+    zone = fast_retries.zones[0]
+
+    await zone.set_airflow_max(40)
+
+    assert sent == [{"ZoneMaxAir": {"Index": 0, "MaxAir": 40}}] * 3
+    assert zone.airflow_max == 40
+
+
+@pytest.mark.asyncio
+async def test_v2_command_gives_up_after_retry_window(
+    fast_retries: MockController,
+) -> None:
+    fast_retries.V2_ERROR_RETRY_WINDOW = 0.05
+    sent = _rejecting_send(fast_retries, rejections=1000)
+    zone = fast_retries.zones[0]
+    before = zone.airflow_max
+
+    with pytest.raises(ControllerCommandError):
+        await zone.set_airflow_max(40)
+
+    assert len(sent) > 1
+    assert zone.airflow_max == before
+
+
+@pytest.mark.asyncio
+async def test_v2_retry_releases_lock_for_other_writes(
+    fast_retries: MockController,
+) -> None:
+    sent = _rejecting_send(fast_retries, rejections=1)
+    zone = fast_retries.zones[0]
+    fast_retries.V2_ERROR_RETRY_INTERVAL = 0.1
+
+    retrying = asyncio.create_task(zone.set_airflow_max(40))
+    await asyncio.sleep(0.05)
+    await zone.set_airflow_min(10)
+    await retrying
+
+    assert sent == [
+        {"ZoneMaxAir": {"Index": 0, "MaxAir": 40}},
+        {"ZoneMinAir": {"Index": 0, "MinAir": 10}},
+        {"ZoneMaxAir": {"Index": 0, "MaxAir": 40}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v2_newer_write_replaces_retrying_write(
+    fast_retries: MockController,
+) -> None:
+    sent = _rejecting_send(fast_retries, rejections=1)
+    zone = fast_retries.zones[0]
+    fast_retries.V2_ERROR_RETRY_INTERVAL = 0.1
+
+    retrying = asyncio.create_task(zone.set_airflow_max(40))
+    await asyncio.sleep(0.05)
+    await zone.set_airflow_max(45)
+    await retrying
+
+    # The replaced write is not sent again.
+    assert sent == [
+        {"ZoneMaxAir": {"Index": 0, "MaxAir": 40}},
+        {"ZoneMaxAir": {"Index": 0, "MaxAir": 45}},
+    ]

@@ -449,6 +449,12 @@ def system_command_to_v2(state: str, value: Any, send: Any) -> dict[str, Any] | 
     return None
 
 
+def command_key(payload: dict[str, Any]) -> tuple[str, int | None]:
+    """Return the field an iZoneCommandV2 payload writes: (command, zone index)."""
+    ((name, body),) = payload.items()
+    return name, body.get("Index") if isinstance(body, dict) else None
+
+
 def zone_command_to_v2(
     command: str, data: dict[str, Any], zone_index: int
 ) -> dict[str, Any]:
@@ -560,7 +566,10 @@ async def command_v2(
     use_content_type: bool | None,
     timeout: float = 10.0,
 ) -> tuple[str, bool | None]:
-    """POST iZoneCommandV2; return (raw body text, content-type mode used)."""
+    """POST iZoneCommandV2; return (raw body text, content-type mode used).
+
+    Sends once; the controller retries ``{ERROR}`` with its lock released.
+    """
     if use_content_type is not None:
         body = await _post_once(
             session,
@@ -570,16 +579,6 @@ async def command_v2(
             use_content_type=use_content_type,
             timeout=timeout,
         )
-        if body.strip().startswith("{ERROR"):
-            await asyncio.sleep(V2_ERROR_BACKOFF)
-            body = await _post_once(
-                session,
-                host,
-                path="iZoneCommandV2",
-                payload=payload,
-                use_content_type=use_content_type,
-                timeout=timeout,
-            )
         return body, use_content_type
 
     for mode in (False, True):

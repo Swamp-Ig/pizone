@@ -41,6 +41,9 @@ _V1_SYSTEM_COMMAND_FIELDS = {
 class MockController(Controller):
     """Controller double backed by static response dictionaries."""
 
+    # Fail on the first {ERROR}; retry behaviour has its own tests.
+    V2_ERROR_RETRY_WINDOW = 0.0
+
     def __init__(
         self,
         discovery_service: DiscoveryService,

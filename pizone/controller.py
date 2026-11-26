@@ -109,6 +109,16 @@ class Controller:
     REQUEST_TIMEOUT = 10
     """Time to wait for a response from the device, in seconds."""
 
+    V2_ERROR_RETRY_INTERVAL = 0.5
+    """Gap between V2 command retries after ``{ERROR}``, in seconds."""
+
+    V2_ERROR_RETRY_WINDOW = 8.0
+    """How long to keep retrying a V2 command that returns ``{ERROR}``.
+
+    Some bridges reject commands for a few seconds while applying an earlier
+    write.
+    """
+
     ZONE_CONFIRM_DELAY = 0.25
     ZONE_CONFIRM_INTERVAL = 2.0
     ZONE_CONFIRM_WINDOW = 30.0
@@ -195,6 +205,7 @@ class Controller:
         self._on_address_changed: Callable[[ControllerEndpoint], None] | None = None
 
         self._sending_lock = Lock()
+        self._v2_write_gens: dict[tuple[str, int | None], int] = {}
         self._refresh_depth: int = 0
         self._refresh_fail_ex: ConnectionError | None = None
         self._zone_mode_confirmations: dict[int, _ZoneModeConfirmation] = {}
@@ -1043,8 +1054,10 @@ class Controller:
         command: str,
         value: DictValue,
         send: DictValue | None = None,
-    ) -> None:
+    ) -> bool:
         """Send a system command and update the local cache.
+
+        Returns False if a newer write to the same field replaced it.
 
         Raises:
             ConnectionError: If the HTTP request fails.
@@ -1055,48 +1068,98 @@ class Controller:
         if send is None:
             send = value
 
-        async with self._sending_lock, self._refresh_scope():
-            if self._read_api == "v2":
-                v2_payload = v2_mod.system_command_to_v2(state, value, send)
-                if state == "FreeAir" and self._isave_v2_unsupported:
-                    v2_payload = None
-                if v2_payload is not None:
-                    try:
-                        await self._http_command_v2(v2_payload)
-                    except ControllerCommandError:
-                        if state != "FreeAir":
-                            raise
-                        self._isave_v2_unsupported = True
-                        await self._http_post(command, {command: send})
-                else:
-                    await self._http_post(command, {command: send})
-                self._system_settings[state] = value
-                await self._fetch_system_v2_unlocked()
-            else:
+        if self._read_api != "v2":
+            async with self._sending_lock, self._refresh_scope():
                 await self._http_post(command, {command: send})
                 self._system_settings[state] = value
                 await self._fetch_system()
+            return True
+
+        async def apply() -> None:
+            self._system_settings[state] = value
+            await self._fetch_system_v2_unlocked()
+
+        v2_payload = v2_mod.system_command_to_v2(state, value, send)
+        if state == "FreeAir" and self._isave_v2_unsupported:
+            v2_payload = None
+        if v2_payload is not None:
+            try:
+                return await self._command_v2_retrying(v2_payload, apply)
+            except ControllerCommandError:
+                if state != "FreeAir":
+                    raise
+                self._isave_v2_unsupported = True
+        async with self._sending_lock, self._refresh_scope():
+            await self._http_post(command, {command: send})
+            await apply()
+        return True
 
     async def _execute_zone_command(
         self, command: str, data: dict[str, Any], zone_index: int
-    ) -> None:
-        """POST a zone command and confirm with a zone refresh."""
+    ) -> bool:
+        """POST a zone command and confirm with a zone refresh.
+
+        Returns False if a newer write to the same field replaced it.
+        """
         self._raise_if_reconfigured()
-        async with self._sending_lock, self._refresh_scope():
-            if self._read_api == "v2":
-                if self._closed:
-                    raise ConnectionError("Controller is closed")
-                payload = v2_mod.zone_command_to_v2(command, data, zone_index)
-                await self._http_command_v2(payload)
-                if "ZoneMode" in payload:
-                    mode = v2_mod.zone_mode_from_wire(payload["ZoneMode"]["Mode"])
-                    self._track_zone_mode(zone_index, mode.value)
-                else:
-                    await self._fetch_zone_v2_unlocked(zone_index)
-            else:
-                group = (zone_index // 4) * 4
+        if self._read_api != "v2":
+            group = (zone_index // 4) * 4
+            async with self._sending_lock, self._refresh_scope():
                 await self._http_post(command, data)
                 await self._fetch_zone_group(group)
+            return True
+
+        payload = v2_mod.zone_command_to_v2(command, data, zone_index)
+
+        async def apply() -> None:
+            if "ZoneMode" in payload:
+                mode = v2_mod.zone_mode_from_wire(payload["ZoneMode"]["Mode"])
+                self._track_zone_mode(zone_index, mode.value)
+            else:
+                await self._fetch_zone_v2_unlocked(zone_index)
+
+        return await self._command_v2_retrying(payload, apply)
+
+    async def _command_v2_retrying(
+        self, payload: dict[str, Any], apply: Callable[[], Awaitable[None]]
+    ) -> bool:
+        """Send *payload* and run *apply*, retrying ``{ERROR}`` without the lock.
+
+        A newer write to the same field replaces one waiting to retry; the
+        replaced call skips *apply* and returns False.
+
+        Raises:
+            ConnectionError: If the HTTP request fails or the controller is closed.
+            ControllerCommandError: If the bridge still rejects the command once
+                ``V2_ERROR_RETRY_WINDOW`` has passed.
+            DeviceReconfigurationError: If the system was reconfigured.
+
+        """
+        key = v2_mod.command_key(payload)
+        gen: int | None = None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.V2_ERROR_RETRY_WINDOW
+        while True:
+            async with self._sending_lock, self._refresh_scope():
+                if gen is None:
+                    gen = self._v2_write_gens.get(key, 0) + 1
+                    self._v2_write_gens[key] = gen
+                elif self._v2_write_gens[key] != gen:
+                    _LOG.debug("Dropping %s, replaced by a newer write", payload)
+                    return False
+                self._raise_if_reconfigured()
+                if self._closed:
+                    raise ConnectionError("Controller is closed")
+                try:
+                    await self._http_command_v2(payload)
+                except ControllerCommandError:
+                    if loop.time() >= deadline:
+                        raise
+                    _LOG.debug("Bridge rejected %s, retrying", payload)
+                else:
+                    await apply()
+                    return True
+            await asyncio.sleep(self.V2_ERROR_RETRY_INTERVAL)
 
     async def _fetch_zone_v2_unlocked(self, index: int) -> None:
         """Refresh one zone via Type=2. Caller must hold ``_sending_lock``."""
