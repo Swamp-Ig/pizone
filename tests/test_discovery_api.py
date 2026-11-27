@@ -1968,6 +1968,70 @@ async def test_name_check_skips_closed_controller() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("created_from", "new_host", "resolved"),
+    [
+        pytest.param("10.0.0.90", "izone.lan", ["izone.lan"], id="ip-to-name"),
+        pytest.param("old.lan", "new.lan", ["new.lan"], id="name-to-name"),
+        pytest.param("old.lan", "10.0.0.91", [], id="name-to-ip"),
+    ],
+)
+async def test_set_host_name_changes_name_check(
+    created_from: str, new_host: str, resolved: list[str]
+) -> None:
+    """The name check resolves the name set last, or nothing for an IPv4 host."""
+    service = MockDiscoveryService()
+    await _create_at(service, "000025841", created_from, resolves_to="10.0.0.90")
+    resolve = AsyncMock(return_value=["10.0.0.90"])
+
+    with patch.object(service, "_resolve", resolve):
+        service.set_host_name("000025841", new_host)
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    assert [call.args[0] for call in resolve.await_args_list] == resolved
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_set_host_name_resets_cooldown() -> None:
+    """A new name is checked on the next failure, even inside the cooldown."""
+    service = MockDiscoveryService()
+    await _create_at(service, "000025841", "old.lan", resolves_to="10.0.0.90")
+    resolve = AsyncMock(return_value=["10.0.0.90"])
+
+    with patch.object(service, "_resolve", resolve):
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+        service.set_host_name("000025841", "new.lan")
+        service.schedule_name_check("000025841")
+        await _settle_tasks(service)
+
+    assert [call.args[0] for call in resolve.await_args_list] == [
+        "old.lan",
+        "new.lan",
+    ]
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_set_host_name_ignores_unclaimed_uid() -> None:
+    """Only a running controller has a name to change."""
+    service = MockDiscoveryService()
+    controller = await _create_at(
+        service, "000025841", "old.lan", resolves_to="10.0.0.90"
+    )
+    await controller.close()
+
+    service.set_host_name("000025841", "new.lan")
+    service.set_host_name("000099999", "other.lan")
+
+    assert service._endpoints["000025841"].host_name is None
+    assert "000099999" not in service._endpoints
+    await service.close()
+
+
+@pytest.mark.asyncio
 async def test_create_controller_unresolvable_name_falls_back_to_scan() -> None:
     service = MockDiscoveryService()
     service._session = cast(

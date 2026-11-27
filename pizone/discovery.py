@@ -345,6 +345,20 @@ class DiscoveryService:
 
         self.create_task(_run())
 
+    def set_host_name(self, uid: str, host: str) -> None:
+        """Set the name a running controller re-resolves after a transport failure.
+
+        For a caller that stores a new host for a running controller without
+        recreating it. An IPv4 *host* clears the name. Does not repoint the
+        controller; :meth:`discover_by_host` does that. No-op unless *uid* is
+        a running controller.
+        """
+        entry = self._entry(uid, _State.CLAIMED)
+        if entry is None:
+            return
+        entry.host_name = None if _is_ipv4(host) else host
+        entry.last_name_check = float("-inf")
+
     def _entry(self, uid: str, *states: _State) -> _Entry | None:
         """Return the entry for *uid* when it is in one of *states*."""
         entry = self._endpoints.get(uid)
